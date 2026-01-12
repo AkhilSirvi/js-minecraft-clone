@@ -35,6 +35,21 @@ export const TREES = {
   maxHeight: 6,          // maximum tree trunk height
 };
 
+// Biome generation
+export const BIOMES = {
+  climateScale: 0.002,     // scale for temperature/humidity noise
+  continentScale: 0.001,   // scale for continent shape noise
+  blendDistance: 8,        // blocks for biome blending (not yet used)
+};
+
+// Ore generation - [minY, maxY, veinSize, rarity]
+export const ORES = {
+  coal: { minY: -64, maxY: 128, veinSize: 12, rarity: 0.08 },
+  iron: { minY: -64, maxY: 64, veinSize: 8, rarity: 0.06 },
+  gold: { minY: -64, maxY: 32, veinSize: 6, rarity: 0.015 },
+  diamond: { minY: -64, maxY: 16, veinSize: 4, rarity: 0.005 },
+};
+
 // ============================================
 // RENDERING
 // ============================================

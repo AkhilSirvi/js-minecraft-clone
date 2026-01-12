@@ -253,8 +253,44 @@ function minimalTest() {
   pitchObject.add(camera);
   player.add(pitchObject);
 
+  // Console teleport command: use in DevTools console: `teleport(x,y,z)` or `tp(x,y,z)`
+  // If `y` is omitted, teleport to top of terrain at x,z. Pass `opts = { safe: false }` to skip searching for free space.
+  window.teleport = function(x, y, z, opts = {}) {
+    const nx = Number(x);
+    const nz = Number(z);
+    if (isNaN(nx) || isNaN(nz)) { console.error('teleport: invalid x or z'); return; }
+    let ny;
+    if (y === undefined || y === null || isNaN(Number(y))) {
+      const top = cm.getTopAtWorld(nx, nz);
+      ny = isFinite(top) ? top + currentPlayerHeight / 2 : (MIN_Y + 1) * blockSize + currentPlayerHeight / 2;
+    } else {
+      ny = Number(y);
+    }
+    const safe = opts.safe !== false;
+    if (safe) {
+      const maxUp = 100;
+      let placed = false;
+      for (let dy = 0; dy <= maxUp; dy++) {
+        const testY = ny + dy;
+        if (isPlayerPositionFree(nx, testY, nz)) {
+          ny = testY;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) console.warn('teleport: no free space found above target, placing at requested Y');
+    }
+    player.position.set(nx, ny, nz);
+    velocity.set(0, 0, 0);
+    velY = 0;
+    onGround = false;
+    cm.update(player.position.x, player.position.z);
+    resolvePlayerCollision();
+    console.log(`Teleported player to (${nx}, ${ny}, ${nz})`);
+  };
+  window.tp = window.teleport;
+
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-  // clamp pixel ratio to avoid extremely high GPU load on high-DPI displays
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(DAY_NIGHT.skyDayColor, 1);

@@ -1,14 +1,58 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MineCraft Clone in JS</title>
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <div id="crosshair"></div>
-  <script type="module" src="js/main.js"></script>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MineCraft Clone in JS</title>
+    <meta name="description" content="A simple Minecraft clone built with JavaScript"/>
+    <link rel="shortcut icon" href="assets/textures/block/oak_log.png" type="image/x-icon"/>
+    <style>
+      html,body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        font-family: Arial, Helvetica, sans-serif;
+      }
 
-</body>
+      canvas {
+        display: block;
+      }
+
+      #crosshair {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        width: 18px;
+        height: 18px;
+        margin-left: -9px;
+        margin-top: -9px;
+        pointer-events: none;
+        z-index: 100000;
+      }
+      #crosshair:before,
+      #crosshair:after {
+        content: "";
+        position: absolute;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      #crosshair:before {
+        left: 50%;
+        top: 0;
+        width: 2px;
+        height: 100%;
+        transform: translateX(-50%);
+      }
+      #crosshair:after {
+        top: 50%;
+        left: 0;
+        width: 100%;
+        height: 2px;
+        transform: translateY(-50%);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="crosshair"></div>
+    <script type="module" src="js/main.js"></script>
+  </body>
 </html>

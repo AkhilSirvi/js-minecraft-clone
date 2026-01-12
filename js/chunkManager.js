@@ -15,6 +15,25 @@ const BLOCK_WATER = 4;
 const BLOCK_SAND = 5;
 const BLOCK_WOOD = 6;
 const BLOCK_LEAVES = 7;
+const BLOCK_GRASS_SNOW = 8;
+const BLOCK_GRAVEL = 9;
+const BLOCK_COAL_ORE = 10;
+const BLOCK_IRON_ORE = 11;
+const BLOCK_GOLD_ORE = 12;
+const BLOCK_DIAMOND_ORE = 13;
+const BLOCK_BEDROCK = 14;
+const BLOCK_CLAY = 15;
+const BLOCK_RED_SAND = 16;
+const BLOCK_SNOW = 17;
+const BLOCK_ICE = 18;
+const BLOCK_CACTUS = 19;
+const BLOCK_DEAD_BUSH = 20;
+const BLOCK_TALL_GRASS = 21;
+const BLOCK_ROSE_BUSH = 22;
+const BLOCK_SUNFLOWER = 23;
+
+// Cross-model blocks (rendered as X-shaped billboards)
+const CROSS_BLOCKS = new Set([BLOCK_DEAD_BUSH, BLOCK_TALL_GRASS, BLOCK_ROSE_BUSH, BLOCK_SUNFLOWER]);
 
 // Face directions: +X, -X, +Y, -Y, +Z, -Z
 // Corners ordered so (v1-v0) × (v2-v0) = face normal direction
@@ -47,87 +66,84 @@ export default class ChunkManager {
     const loader = new THREE.TextureLoader();
     const nearest = THREE.NearestFilter;
 
-    const dirtTex = loader.load('assets/textures/block/dirt.png');
-    dirtTex.magFilter = nearest; dirtTex.minFilter = THREE.NearestMipMapNearestFilter;
-
-    const sandTex = loader.load('assets/textures/block/sand.png');
-    sandTex.magFilter = nearest; sandTex.minFilter = THREE.NearestMipMapNearestFilter;
-
-    const grassSideTex = loader.load('assets/textures/block/grass_block_side.png');
-    grassSideTex.magFilter = nearest; grassSideTex.minFilter = THREE.NearestMipMapNearestFilter;
-
-    // Materials
-    const stoneMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
-    const dirtMat = new THREE.MeshLambertMaterial({ map: dirtTex });
-    const waterMat = new THREE.MeshLambertMaterial({ color: 0x1E90FF, transparent: true, opacity: 0.6 });
-    const sandMat = new THREE.MeshLambertMaterial({ map: sandTex });
-
-    // Wood textures
-    const oakSideTex = loader.load('assets/textures/block/oak_log.png');
-    const oakTopTex = loader.load('assets/textures/block/oak_log_top.png');
-    oakSideTex.magFilter = nearest; oakSideTex.minFilter = THREE.NearestMipMapNearestFilter;
-    oakTopTex.magFilter = nearest; oakTopTex.minFilter = THREE.NearestMipMapNearestFilter;
-    const woodSideMat = new THREE.MeshLambertMaterial({ map: oakSideTex });
-    const woodTopMat = new THREE.MeshLambertMaterial({ map: oakTopTex });
-
-    // Grass materials (per-face: side, side, top, bottom, side, side)
-    const grassSideMat = new THREE.MeshLambertMaterial({ map: grassSideTex });
-    const grassTopMat = new THREE.MeshLambertMaterial({ color: 0x44aa44 }); // Placeholder
-    const grassBottomMat = new THREE.MeshLambertMaterial({ map: dirtTex });
-
-    // Leaves material
-    const leavesMat = new THREE.MeshLambertMaterial({ color: 0x22aa22, transparent: true, opacity: 0.9 });
-
-    // Load and colorize grass top texture
-    const grassTopTexPlaceholder = new THREE.Texture();
-    const grassImg = new Image();
-    grassImg.src = 'assets/textures/block/grass_block_top.png';
-    grassImg.crossOrigin = '';
-    grassImg.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = grassImg.width; canvas.height = grassImg.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(grassImg, 0, 0);
-      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const gr = 77, gg = 220, gb = 57;
-      for (let i = 0; i < id.data.length; i += 4) {
-        const intensity = id.data[i] / 255;
-        id.data[i] = Math.round(gr * intensity);
-        id.data[i+1] = Math.round(gg * intensity);
-        id.data[i+2] = Math.round(gb * intensity);
-      }
-      ctx.putImageData(id, 0, 0);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.magFilter = nearest; tex.minFilter = THREE.NearestMipMapNearestFilter;
-      grassTopMat.map = tex;
-      grassTopMat.color.setHex(0xffffff);
-      grassTopMat.needsUpdate = true;
+    // Helper to load and configure texture
+    const loadTex = (path) => {
+      const tex = loader.load(path);
+      tex.magFilter = nearest;
+      tex.minFilter = THREE.NearestMipMapNearestFilter;
+      return tex;
     };
 
-    // Colorize leaves texture
-    const leafImg = new Image();
-    leafImg.src = 'assets/textures/block/oak_leaves.png';
-    leafImg.crossOrigin = '';
-    leafImg.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = leafImg.width; canvas.height = leafImg.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(leafImg, 0, 0);
-      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const gr = 30, gg = 220, gb = 30;
-      for (let i = 0; i < id.data.length; i += 4) {
-        const intensity = id.data[i] / 255;
-        id.data[i] = Math.round(gr * intensity);
-        id.data[i+1] = Math.round(gg * intensity);
-        id.data[i+2] = Math.round(gb * intensity);
-      }
-      ctx.putImageData(id, 0, 0);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.magFilter = nearest; tex.minFilter = THREE.NearestMipMapNearestFilter;
-      leavesMat.map = tex;
-      leavesMat.color.setHex(0xffffff);
-      leavesMat.needsUpdate = true;
+    // Texture path map (reuse dirt for missing plant assets)
+    const texturePaths = {
+      dirt: 'assets/textures/block/dirt.png',
+      sand: 'assets/textures/block/sand.png',
+      grassSide: 'assets/textures/block/grass_block_side.png',
+      grassTop: 'assets/textures/block/grass_block_top.png',
+      stone: 'assets/textures/block/stone.png',
+      gravel: 'assets/textures/block/gravel.png',
+      clay: 'assets/textures/block/clay.png',
+      redSand: 'assets/textures/block/red_sand.png',
+      bedrock: 'assets/textures/block/bedrock.png',
+      snow: 'assets/textures/block/snow.png',
+      ice: 'assets/textures/block/ice.png',
+      coalOre: 'assets/textures/block/coal_ore.png',
+      ironOre: 'assets/textures/block/iron_ore.png',
+      goldOre: 'assets/textures/block/gold_ore.png',
+      diamondOre: 'assets/textures/block/diamond_ore.png',
+      oakSide: 'assets/textures/block/oak_log.png',
+      oakTop: 'assets/textures/block/oak_log_top.png',
+      cactus: 'assets/textures/block/cactus.png',
+      grassSnowSide: 'assets/textures/block/grass_block_snow_side.png',
+      deadBush: 'assets/textures/block/dead_bush.png',
+      tallGrassBottom: 'assets/textures/block/dirt.png',
+      roseBushBottom: 'assets/textures/block/dirt.png',
+      sunflowerFront: 'assets/textures/block/dirt.png',
+      oakLeaves: 'assets/textures/block/oak_leaves.png'
     };
+
+    const T = {};
+    for (const [k, p] of Object.entries(texturePaths)) T[k] = loadTex(p);
+
+    // Material factory helpers
+    const mat = (opts) => new THREE.MeshLambertMaterial(opts);
+    const withMap = (key, opts = {}) => mat(Object.assign({ map: T[key] }, opts));
+
+    // Create materials concisely
+    const stoneMat = withMap('stone');
+    const dirtMat = withMap('dirt');
+    const waterMat = mat({ color: 0x1E90FF, transparent: true, opacity: 0.6 });
+    const sandMat = withMap('sand');
+    const gravelMat = withMap('gravel');
+    const clayMat = withMap('clay');
+    const redSandMat = withMap('redSand');
+    const bedrockMat = withMap('bedrock');
+    const snowMat = withMap('snow');
+    const iceMat = mat({ map: T.ice, transparent: true, opacity: 0.9 });
+
+    const coalOreMat = withMap('coalOre');
+    const ironOreMat = withMap('ironOre');
+    const goldOreMat = withMap('goldOre');
+    const diamondOreMat = withMap('diamondOre');
+
+    const woodSideMat = withMap('oakSide');
+    const woodTopMat = withMap('oakTop');
+
+    const cactusMat = withMap('cactus');
+
+    const grassSideMat = withMap('grassSide');
+    const grassTopMat = withMap('grassTop');
+    const grassBottomMat = dirtMat;
+
+    const grassSnowSideMat = withMap('grassSnowSide');
+    const grassSnowTopMat = withMap('snow');
+
+    const leavesMat = mat({ map: T.oakLeaves, transparent: true, opacity: 0.9, alphaTest: 0.5 });
+
+    const deadBushMat = mat({ map: T.deadBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const tallGrassMat = mat({ map: T.tallGrassBottom, side: THREE.DoubleSide });
+    const roseBushMat = mat({ map: T.roseBushBottom, side: THREE.DoubleSide });
+    const sunflowerMat = mat({ map: T.sunflowerFront, side: THREE.DoubleSide });
 
     return {
       stone: stoneMat,
@@ -135,9 +151,26 @@ export default class ChunkManager {
       sand: sandMat,
       water: waterMat,
       leaves: leavesMat,
-      // Per-face materials for grass and wood
+      gravel: gravelMat,
+      clay: clayMat,
+      redSand: redSandMat,
+      bedrock: bedrockMat,
+      snow: snowMat,
+      ice: iceMat,
+      coalOre: coalOreMat,
+      ironOre: ironOreMat,
+      goldOre: goldOreMat,
+      diamondOre: diamondOreMat,
+      // Cross-model plants
+      deadBush: deadBushMat,
+      tallGrass: tallGrassMat,
+      roseBush: roseBushMat,
+      sunflower: sunflowerMat,
+      // Per-face materials for grass, snowy grass, wood, and cactus
       grass: [grassSideMat, grassSideMat, grassTopMat, grassBottomMat, grassSideMat, grassSideMat],
-      wood: [woodSideMat, woodSideMat, woodTopMat, woodTopMat, woodSideMat, woodSideMat]
+      grassSnow: [grassSnowSideMat, grassSnowSideMat, grassSnowTopMat, grassBottomMat, grassSnowSideMat, grassSnowSideMat],
+      wood: [woodSideMat, woodSideMat, woodTopMat, woodTopMat, woodSideMat, woodSideMat],
+      cactus: [cactusMat, cactusMat, cactusMat, cactusMat, cactusMat, cactusMat]
     };
   }
 
@@ -165,9 +198,10 @@ export default class ChunkManager {
     return neighbor.data[idx];
   }
 
-  // Check if a block type is transparent (air, water, or leaves)
+  // Check if a block type is transparent (air, water, leaves, ice, or cross-model plants)
   _isTransparent(blockId) {
-    return blockId === BLOCK_AIR || blockId === BLOCK_WATER || blockId === BLOCK_LEAVES;
+    return blockId === BLOCK_AIR || blockId === BLOCK_WATER || blockId === BLOCK_LEAVES || 
+           blockId === BLOCK_ICE || CROSS_BLOCKS.has(blockId);
   }
 
   _loadChunk(cx, cz) {
@@ -197,6 +231,10 @@ export default class ChunkManager {
     for (const mesh of meshes) {
       group.add(mesh);
     }
+    // Position the chunk group at its world origin so geometry can be local
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    group.position.set(chunkWorldX, 0, chunkWorldZ);
 
     this.scene.add(group);
     this.chunks.set(this._key(cx, cz), { cx, cz, group, top, data: chunk.data });
@@ -259,8 +297,8 @@ export default class ChunkManager {
 
   _buildChunkMesh(chunk, cx, cz, top) {
     const bs = this.blockSize;
-    const chunkWorldX = cx * CHUNK_SIZE * bs;
-    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    // Build geometry using local chunk-space coordinates (0..CHUNK_SIZE*bs)
+    // and let the caller position the returned group at the chunk world origin.
 
     // Collect faces per material type and face direction
     // For single-material blocks: key = 'stone', 'dirt', etc.
@@ -276,6 +314,9 @@ export default class ChunkManager {
           const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
           const blockId = chunk.data[idx];
           if (blockId === BLOCK_AIR) continue;
+          
+          // Skip cross-model blocks in normal face rendering
+          if (CROSS_BLOCKS.has(blockId)) continue;
 
           // Check each face direction
           for (let faceIdx = 0; faceIdx < 6; faceIdx++) {
@@ -286,40 +327,123 @@ export default class ChunkManager {
             // Only render face if neighbor is transparent (and we're not water looking at water)
             if (!this._isTransparent(neighborId)) continue;
             if (blockId === BLOCK_WATER && neighborId === BLOCK_WATER) continue;
+            if (blockId === BLOCK_ICE && neighborId === BLOCK_ICE) continue;
 
             // Determine material key
             let matKey;
-            if (blockId === BLOCK_GRASS) {
-              matKey = `grass_${faceIdx}`;
-            } else if (blockId === BLOCK_WOOD) {
-              matKey = `wood_${faceIdx}`;
-            } else if (blockId === BLOCK_STONE) {
-              matKey = 'stone';
-            } else if (blockId === BLOCK_DIRT) {
-              matKey = 'dirt';
-            } else if (blockId === BLOCK_SAND) {
-              matKey = 'sand';
-            } else if (blockId === BLOCK_WATER) {
-              matKey = 'water';
-            } else if (blockId === BLOCK_LEAVES) {
-              matKey = 'leaves';
-            } else {
-              matKey = 'stone';
+            switch (blockId) {
+              case BLOCK_GRASS:
+                matKey = `grass_${faceIdx}`;
+                break;
+              case BLOCK_GRASS_SNOW:
+                matKey = `grassSnow_${faceIdx}`;
+                break;
+              case BLOCK_WOOD:
+                matKey = `wood_${faceIdx}`;
+                break;
+              case BLOCK_CACTUS:
+                matKey = `cactus_${faceIdx}`;
+                break;
+              case BLOCK_STONE:
+                matKey = 'stone';
+                break;
+              case BLOCK_DIRT:
+                matKey = 'dirt';
+                break;
+              case BLOCK_SAND:
+                matKey = 'sand';
+                break;
+              case BLOCK_WATER:
+                matKey = 'water';
+                break;
+              case BLOCK_LEAVES:
+                matKey = 'leaves';
+                break;
+              case BLOCK_GRAVEL:
+                matKey = 'gravel';
+                break;
+              case BLOCK_CLAY:
+                matKey = 'clay';
+                break;
+              case BLOCK_RED_SAND:
+                matKey = 'redSand';
+                break;
+              case BLOCK_BEDROCK:
+                matKey = 'bedrock';
+                break;
+              case BLOCK_SNOW:
+                matKey = 'snow';
+                break;
+              case BLOCK_ICE:
+                matKey = 'ice';
+                break;
+              case BLOCK_COAL_ORE:
+                matKey = 'coalOre';
+                break;
+              case BLOCK_IRON_ORE:
+                matKey = 'ironOre';
+                break;
+              case BLOCK_GOLD_ORE:
+                matKey = 'goldOre';
+                break;
+              case BLOCK_DIAMOND_ORE:
+                matKey = 'diamondOre';
+                break;
+              default:
+                matKey = 'stone';
             }
 
             if (!faceLists[matKey]) faceLists[matKey] = [];
 
             // Add face vertices
             const corners = FACE_DIRS[faceIdx].corners;
-            const worldX = chunkWorldX + x * bs;
-            const worldY = (y - MIN_Y + MIN_Y) * bs; // = y * bs
-            const worldZ = chunkWorldZ + z * bs;
+            const worldX = x * bs;
+            const worldY = y * bs;
+            const worldZ = z * bs;
 
             faceLists[matKey].push({
               x: worldX, y: worldY, z: worldZ,
               corners: corners,
               faceIdx: faceIdx
             });
+          }
+        }
+      }
+    }
+
+    // Collect cross-model blocks (plants rendered as X-shaped billboards)
+    const crossBlocks = {
+      deadBush: [],
+      tallGrass: [],
+      roseBush: [],
+      sunflower: []
+    };
+
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        const topY = top[x * CHUNK_SIZE + z];
+        if (topY < MIN_Y) continue;
+
+        for (let y = MIN_Y; y <= topY; y++) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = chunk.data[idx];
+          
+          if (!CROSS_BLOCKS.has(blockId)) continue;
+
+          const worldX = x * bs;
+          const worldY = y * bs;
+          const worldZ = z * bs;
+
+          let matKey;
+          switch (blockId) {
+            case BLOCK_DEAD_BUSH: matKey = 'deadBush'; break;
+            case BLOCK_TALL_GRASS: matKey = 'tallGrass'; break;
+            case BLOCK_ROSE_BUSH: matKey = 'roseBush'; break;
+            case BLOCK_SUNFLOWER: matKey = 'sunflower'; break;
+          }
+          
+          if (matKey && crossBlocks[matKey]) {
+            crossBlocks[matKey].push({ x: worldX, y: worldY, z: worldZ });
           }
         }
       }
@@ -374,9 +498,15 @@ export default class ChunkManager {
       if (matKey.startsWith('grass_')) {
         const faceIdx = parseInt(matKey.split('_')[1]);
         material = this.materials.grass[faceIdx];
+      } else if (matKey.startsWith('grassSnow_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.grassSnow[faceIdx];
       } else if (matKey.startsWith('wood_')) {
         const faceIdx = parseInt(matKey.split('_')[1]);
         material = this.materials.wood[faceIdx];
+      } else if (matKey.startsWith('cactus_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.cactus[faceIdx];
       } else {
         material = this.materials[matKey];
       }
@@ -391,6 +521,72 @@ export default class ChunkManager {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.frustumCulled = true;
       meshes.push(mesh);
+    }
+
+    // Build cross-model meshes (X-shaped billboards for plants)
+    for (const [matKey, blocks] of Object.entries(crossBlocks)) {
+      if (blocks.length === 0) continue;
+
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const indices = [];
+
+      let vertexOffset = 0;
+      for (const block of blocks) {
+        const cx = block.x + bs * 0.5;
+        const cy = block.y;
+        const cz = block.z + bs * 0.5;
+        const halfSize = bs * 0.45;
+
+        // Two diagonal quads forming an X shape
+        const quads = [
+          // Diagonal 1 (NE-SW)
+          [
+            [cx - halfSize, cy, cz - halfSize],
+            [cx + halfSize, cy, cz + halfSize],
+            [cx + halfSize, cy + bs, cz + halfSize],
+            [cx - halfSize, cy + bs, cz - halfSize]
+          ],
+          // Diagonal 2 (NW-SE)
+          [
+            [cx - halfSize, cy, cz + halfSize],
+            [cx + halfSize, cy, cz - halfSize],
+            [cx + halfSize, cy + bs, cz - halfSize],
+            [cx - halfSize, cy + bs, cz + halfSize]
+          ]
+        ];
+
+        for (const quad of quads) {
+          // Add vertices
+          positions.push(...quad[0], ...quad[1], ...quad[2], ...quad[3]);
+          // Use up normal for all vertices
+          normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+          // UVs
+          uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+          // Indices
+          indices.push(
+            vertexOffset, vertexOffset + 1, vertexOffset + 2,
+            vertexOffset, vertexOffset + 2, vertexOffset + 3
+          );
+          vertexOffset += 4;
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices);
+
+      const material = this.materials[matKey];
+      if (material) {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.frustumCulled = true;
+        meshes.push(mesh);
+      } else {
+        geometry.dispose();
+      }
     }
 
     return meshes;
