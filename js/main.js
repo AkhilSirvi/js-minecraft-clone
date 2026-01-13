@@ -1,6 +1,7 @@
 import * as THREE from './three.module.js';
 import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y } from './chunkGen.js';
-import ChunkManager from './chunkManager.js';
+import ChunkManager, { isBlockPassable } from './chunkManager.js';
+import { initInteraction } from './interaction.js';
 import createDebugOverlay from './debugOverlay.js';
 import { 
   SEED, 
@@ -131,7 +132,8 @@ function minimalTest() {
       for (let bz = minBlockZ; bz <= maxBlockZ; bz++) {
         for (let by = minBlockY; by <= maxBlockY; by++) {
           const id = cm.getBlockAtWorld(bx * bs + 0.5 * bs, by * bs + 0.5 * bs, bz * bs + 0.5 * bs);
-          if (id !== 0) return false; // blocked
+          // Use isBlockPassable to check if this block allows player passage
+          if (!isBlockPassable(id)) return false; // blocked by solid block
         }
       }
     }
@@ -307,6 +309,9 @@ function minimalTest() {
   renderer.domElement.addEventListener('click', () => {
     renderer.domElement.requestPointerLock();
   });
+
+  // Initialize interaction (mining/placing)
+  const interaction = initInteraction(cm, camera, renderer.domElement, { placeBlockId: 2, reach: 6 });
 
   const grid = new THREE.GridHelper(400, 40, 0x444444, 0x888888);
   scene.add(grid);

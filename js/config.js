@@ -37,16 +37,20 @@ export const TREES = {
 
 // Biome generation
 export const BIOMES = {
-  climateScale: 0.002,     // scale for temperature/humidity noise
-  continentScale: 0.001,   // scale for continent shape noise
-  blendDistance: 8,        // blocks for biome blending (not yet used)
+  temperatureScale: 0.0015,  // Large scale for temperature (latitude-like bands)
+  humidityScale: 0.0025,     // Medium scale for humidity variation
+  continentScale: 0.0008,    // Very large scale for continent shapes
+  erosionScale: 0.004,       // Local terrain roughness variation
+  vegetationScale: 0.08,     // Fine-grained vegetation patches
+  treeClusterScale: 0.025,   // Medium-grained tree clustering
+  blendDistance: 16,         // Blocks for biome blending
 };
 
 // Ore generation - [minY, maxY, veinSize, rarity]
 export const ORES = {
-  coal: { minY: -64, maxY: 128, veinSize: 12, rarity: 0.08 },
-  iron: { minY: -64, maxY: 64, veinSize: 8, rarity: 0.06 },
-  gold: { minY: -64, maxY: 32, veinSize: 6, rarity: 0.015 },
+  coal: { minY: -64, maxY: 128, veinSize: 6, rarity: 0.08 },
+  iron: { minY: -64, maxY: 64, veinSize: 5, rarity: 0.06 },
+  gold: { minY: -64, maxY: 32, veinSize: 4, rarity: 0.015 },
   diamond: { minY: -64, maxY: 16, veinSize: 4, rarity: 0.005 },
 };
 
@@ -111,7 +115,7 @@ export const CAMERA = {
   mouseSensitivity: 0.002,  // mouse look sensitivity
   thirdPersonDistance: 5,   // distance behind player in 3rd person
   thirdPersonHeight: 0.35,  // height offset (multiplied by player height)
-  eyeHeight: 0.9,           // eye position (multiplied by player height)
+  eyeHeight: 0.5,           // eye position (multiplied by player height)
 };
 
 // ============================================

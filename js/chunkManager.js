@@ -35,6 +35,17 @@ const BLOCK_SUNFLOWER = 23;
 // Cross-model blocks (rendered as X-shaped billboards)
 const CROSS_BLOCKS = new Set([BLOCK_DEAD_BUSH, BLOCK_TALL_GRASS, BLOCK_ROSE_BUSH, BLOCK_SUNFLOWER]);
 
+// Passable blocks - no collision (vegetation, water, etc.)
+const PASSABLE_BLOCKS = new Set([
+  BLOCK_AIR, BLOCK_WATER, BLOCK_DEAD_BUSH, BLOCK_TALL_GRASS, 
+  BLOCK_ROSE_BUSH, BLOCK_SUNFLOWER, BLOCK_SNOW
+]);
+
+// Check if a block is passable (no collision)
+export function isBlockPassable(blockId) {
+  return PASSABLE_BLOCKS.has(blockId);
+}
+
 // Face directions: +X, -X, +Y, -Y, +Z, -Z
 // Corners ordered so (v1-v0) × (v2-v0) = face normal direction
 // Triangle indices (0,1,2) and (0,2,3) form the quad
@@ -96,9 +107,9 @@ export default class ChunkManager {
       cactus: 'assets/textures/block/cactus.png',
       grassSnowSide: 'assets/textures/block/grass_block_snow_side.png',
       deadBush: 'assets/textures/block/dead_bush.png',
-      tallGrassBottom: 'assets/textures/block/dirt.png',
-      roseBushBottom: 'assets/textures/block/dirt.png',
-      sunflowerFront: 'assets/textures/block/dirt.png',
+      tallGrass: 'assets/textures/block/tall_grass_top.png',
+      roseBush: 'assets/textures/block/rose_bush_top.png',
+      sunflower: 'assets/textures/block/sunflower.png',
       oakLeaves: 'assets/textures/block/oak_leaves.png'
     };
 
@@ -141,9 +152,9 @@ export default class ChunkManager {
     const leavesMat = mat({ map: T.oakLeaves, transparent: true, opacity: 0.9, alphaTest: 0.5 });
 
     const deadBushMat = mat({ map: T.deadBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-    const tallGrassMat = mat({ map: T.tallGrassBottom, side: THREE.DoubleSide });
-    const roseBushMat = mat({ map: T.roseBushBottom, side: THREE.DoubleSide });
-    const sunflowerMat = mat({ map: T.sunflowerFront, side: THREE.DoubleSide });
+    const tallGrassMat = mat({ map: T.tallGrass, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const roseBushMat = mat({ map: T.roseBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const sunflowerMat = mat({ map: T.sunflower, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
 
     return {
       stone: stoneMat,
@@ -211,14 +222,19 @@ export default class ChunkManager {
     // Add trees to chunk data
     this._addTrees(chunk, cx, cz);
 
-    // Compute top array for collision
+    // Compute top array for collision (ignoring passable blocks like vegetation)
     const top = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
     for (let x = 0; x < CHUNK_SIZE; x++) {
       for (let z = 0; z < CHUNK_SIZE; z++) {
         let topY = MIN_Y - 1;
         for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
           const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
-          if (chunk.data[idx] !== BLOCK_AIR) { topY = y; break; }
+          const blockId = chunk.data[idx];
+          // Only count solid (non-passable) blocks for collision top
+          if (blockId !== BLOCK_AIR && !PASSABLE_BLOCKS.has(blockId)) { 
+            topY = y; 
+            break; 
+          }
         }
         top[x * CHUNK_SIZE + z] = topY;
       }
@@ -710,10 +726,11 @@ export default class ChunkManager {
       rec = this.chunks.get(recKey);
       if (!rec) return -Infinity;
     }
-    // Scan downward from startBlockY to find the first solid block
+    // Scan downward from startBlockY to find the first solid (non-passable) block
     for (let by = startBlockY; by >= MIN_Y; by--) {
       const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (by - MIN_Y);
-      if (rec.data[idx] !== 0) {
+      const blockId = rec.data[idx];
+      if (blockId !== 0 && !PASSABLE_BLOCKS.has(blockId)) {
         // Found solid block, return top surface (one block above)
         return (by + 1) * bs;
       }
@@ -742,5 +759,84 @@ export default class ChunkManager {
     if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) return 0;
     const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
     return rec.data[idx] || 0;
+  }
+
+  // Set a block at world coordinates (worldX/worldY/worldZ are world-space positions)
+  setBlockAtWorld(worldX, worldY, worldZ, blockId) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const gyBlock = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const recKey = this._key(cx, cz);
+    let rec = this.chunks.get(recKey);
+    if (!rec) {
+      // load synchronously so change is immediate
+      this._loadChunk(cx, cz);
+      rec = this.chunks.get(recKey);
+      if (!rec) return false;
+    }
+
+    const y = gyBlock;
+    if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) return false;
+    const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
+    rec.data[idx] = blockId;
+
+    // Recompute top for this column (ignore passable blocks)
+    const colIndex = localX * CHUNK_SIZE + localZ;
+    let topY = MIN_Y - 1;
+    for (let ty = MIN_Y + HEIGHT - 1; ty >= MIN_Y; ty--) {
+      const tIdx = (localX * CHUNK_SIZE + localZ) * HEIGHT + (ty - MIN_Y);
+      const bid = rec.data[tIdx];
+      if (bid !== BLOCK_AIR && !PASSABLE_BLOCKS.has(bid)) { topY = ty; break; }
+    }
+    rec.top[colIndex] = topY;
+
+    // Rebuild this chunk's meshes in-place
+    this._rebuildChunk(cx, cz);
+
+    // If changed block is on chunk border, rebuild neighboring chunks too (to update faces)
+    const rebuildIfNeighbour = (nx, nz) => {
+      const nKey = this._key(nx, nz);
+      const nRec = this.chunks.get(nKey);
+      if (nRec) this._rebuildChunk(nx, nz);
+    };
+    if (localX === 0) rebuildIfNeighbour(cx - 1, cz);
+    if (localX === CHUNK_SIZE - 1) rebuildIfNeighbour(cx + 1, cz);
+    if (localZ === 0) rebuildIfNeighbour(cx, cz - 1);
+    if (localZ === CHUNK_SIZE - 1) rebuildIfNeighbour(cx, cz + 1);
+
+    return true;
+  }
+
+  // Rebuild chunk meshes for an already-loaded chunk (in-place replacement)
+  _rebuildChunk(cx, cz) {
+    const key = this._key(cx, cz);
+    const rec = this.chunks.get(key);
+    if (!rec) return;
+    const bs = this.blockSize;
+
+    // Dispose old geometries and remove from scene
+    if (rec.group) {
+      rec.group.traverse((child) => {
+        if (child.isMesh && child.geometry) child.geometry.dispose();
+      });
+      this.scene.remove(rec.group);
+    }
+
+    // Build new meshes based on current data and top
+    const chunkLike = { data: rec.data };
+    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top);
+    const newGroup = new THREE.Group();
+    for (const mesh of meshes) newGroup.add(mesh);
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    newGroup.position.set(chunkWorldX, 0, chunkWorldZ);
+
+    this.scene.add(newGroup);
+    rec.group = newGroup;
   }
 }
