@@ -113,7 +113,8 @@ export default class ChunkManager {
       tallGrass: 'assets/textures/block/tall_grass_top.png',
       roseBush: 'assets/textures/block/rose_bush_top.png',
       sunflower: 'assets/textures/block/sunflower.png',
-      oakLeaves: 'assets/textures/block/oak_leaves.png'
+      oakLeaves: 'assets/textures/block/oak_leaves.png',
+      waterStill: 'assets/textures/block/water_still.png'
     };
 
     const T = {};
@@ -126,14 +127,14 @@ export default class ChunkManager {
     // Create materials concisely
     const stoneMat = withMap('stone');
     const dirtMat = withMap('dirt');
-    const waterMat = mat({ color: 0x1E90FF, transparent: true, opacity: 0.6 });
+    const waterMat = mat({ map: T.waterStill, transparent: true, opacity: 0.6, side: THREE.DoubleSide });
     const sandMat = withMap('sand');
     const gravelMat = withMap('gravel');
     const clayMat = withMap('clay');
     const redSandMat = withMap('redSand');
     const bedrockMat = withMap('bedrock');
     const snowMat = withMap('snow');
-    const iceMat = mat({ map: T.ice, transparent: true, opacity: 0.9 });
+    const iceMat = mat({ map: T.ice, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
 
     const coalOreMat = withMap('coalOre');
     const ironOreMat = withMap('ironOre');
@@ -225,7 +226,7 @@ export default class ChunkManager {
     // Add trees to chunk data
     this._addTrees(chunk, cx, cz);
 
-    // Compute top array for collision (ignoring passable blocks like vegetation)
+    // Compute top array for collision and rendering (highest non-air block)
     const top = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
     for (let x = 0; x < CHUNK_SIZE; x++) {
       for (let z = 0; z < CHUNK_SIZE; z++) {
@@ -233,8 +234,8 @@ export default class ChunkManager {
         for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
           const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
           const blockId = chunk.data[idx];
-          // Only count solid (non-passable) blocks for collision top
-          if (blockId !== BLOCK_AIR && !PASSABLE_BLOCKS.has(blockId)) { 
+          // Count all non-air blocks for top (including passable like water)
+          if (blockId !== BLOCK_AIR) { 
             topY = y; 
             break; 
           }
@@ -357,8 +358,8 @@ export default class ChunkManager {
             const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
             const neighborId = this._getBlock(chunk.data, cx, cz, nx, ny, nz);
 
-            // Only render face if neighbor is transparent (and we're not water looking at water)
-            if (!this._isTransparent(neighborId)) continue;
+            // Only render face if neighbor is transparent or block is transparent (for water/ice surfaces)
+            if (!this._isTransparent(neighborId) && !this._isTransparent(blockId)) continue;
             if (blockId === BLOCK_WATER && neighborId === BLOCK_WATER) continue;
             if (blockId === BLOCK_ICE && neighborId === BLOCK_ICE) continue;
 
@@ -908,7 +909,7 @@ export default class ChunkManager {
         for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
           const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
           const blockId = rec.data[idx];
-          if (blockId !== BLOCK_AIR && !PASSABLE_BLOCKS.has(blockId)) {
+          if (blockId !== BLOCK_AIR) {
             topY = y;
             break;
           }

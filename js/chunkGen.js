@@ -3,7 +3,7 @@
 // Features: Biomes, complex terrain, caves, ores, trees, and vegetation.
 
 import { createPerlin } from './perlin.js';
-import { TERRAIN, CAVES, TREES, ORES as CONFIG_ORES } from './config.js';
+import { TERRAIN, CAVES, TREES, ORES as CONFIG_ORES, BIOMES } from './config.js';
 
 export const CHUNK_SIZE = 16;
 export const MIN_Y = -64;
@@ -312,12 +312,12 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
   // PHASE 1: Generate climate maps with proper scales for biome coherence
   // ==========================================
   // Use larger scales for smoother, more realistic biome regions
-  const temperatureScale = 0.0015;   // Large scale for temperature bands
-  const humidityScale = 0.0025;      // Medium scale for humidity variation
-  const continentScale = 0.0008;     // Very large scale for continent shapes
-  const erosionScale = 0.004;        // Erosion affects local terrain roughness
-  const vegetationNoiseScale = 0.08; // Fine-grained vegetation patches
-  const treeNoiseScale = 0.025;      // Medium-grained tree clustering
+  const temperatureScale = BIOMES.temperatureScale;   // Large scale for temperature bands
+  const humidityScale = BIOMES.humidityScale;      // Medium scale for humidity variation
+  const continentScale = BIOMES.continentScale;     // Very large scale for continent shapes
+  const erosionScale = BIOMES.erosionScale;        // Erosion affects local terrain roughness
+  const vegetationNoiseScale = BIOMES.vegetationScale; // Fine-grained vegetation patches
+  const treeNoiseScale = BIOMES.treeClusterScale;      // Medium-grained tree clustering
   
   // Erosion cache for this chunk
   const erosionCache = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);

@@ -313,14 +313,6 @@ function minimalTest() {
   // Initialize interaction (mining/placing)
   const interaction = initInteraction(cm, camera, renderer.domElement, { placeBlockId: 2, reach: 6 });
 
-  const grid = new THREE.GridHelper(400, 40, 0x444444, 0x888888);
-  scene.add(grid);
-
-  const axes = new THREE.AxesHelper(50);
-  scene.add(axes);
-
-  // (removed debug rotating cube)
-
   // Movement state
   const move = { forward: false, backward: false, left: false, right: false, sprint: false, crouch: false };
 

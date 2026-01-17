@@ -39,11 +39,11 @@ export const TREES = {
 export const BIOMES = {
   temperatureScale: 0.0015,  // Large scale for temperature (latitude-like bands)
   humidityScale: 0.0025,     // Medium scale for humidity variation
-  continentScale: 0.0008,    // Very large scale for continent shapes
+  continentScale: 0.008,    // Very large scale for continent shapes
   erosionScale: 0.004,       // Local terrain roughness variation
-  vegetationScale: 0.08,     // Fine-grained vegetation patches
+  vegetationScale: 0.8,     // Fine-grained vegetation patches
   treeClusterScale: 0.025,   // Medium-grained tree clustering
-  blendDistance: 16,         // Blocks for biome blending
+  blendDistance: 160,         // Blocks for biome blending
 };
 
 // Ore generation - [minY, maxY, veinSize, rarity]
@@ -66,7 +66,7 @@ export const RENDER = {
   farClip: 2000,         // far clipping plane
   maxPixelRatio: 1.5,    // max device pixel ratio (performance)
   showFPS: true,         // show FPS counter on screen
-  chunkHysteresis: 1,    // extra chunk margin before unloading
+  chunkHysteresis: 0,    // extra chunk margin before unloading
 };
 
 // ============================================
