@@ -30,7 +30,7 @@ export const CAVES = {
 
 // Tree generation
 export const TREES = {
-  probability: 0.06,     // chance per grass block to spawn tree (0-1)
+  probability: 0.04,     // chance per grass block to spawn tree (0-1)
   minHeight: 4,          // minimum tree trunk height
   maxHeight: 6,          // maximum tree trunk height
 };
@@ -59,8 +59,8 @@ export const ORES = {
 // ============================================
 
 export const RENDER = {
-  viewDistance: 6,       // chunk render distance (in chunks) - increased thanks to optimizations
-  maxLoadsPerFrame: 3,   // chunks to load per frame (increased for faster loading)
+  viewDistance: 5,       // chunk render distance (in chunks) - increased thanks to optimizations
+  maxLoadsPerFrame: 1,   // chunks to load per frame (reduced to prevent lag)
   fov: 75,               // camera field of view
   nearClip: 0.1,         // near clipping plane
   farClip: 2000,         // far clipping plane

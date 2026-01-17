@@ -2,7 +2,7 @@
 // Manage procedural chunk generation and streaming around a center position.
 // OPTIMIZED: Uses merged BufferGeometry with face culling for minimal draw calls.
 
-import { generateChunk, CHUNK_SIZE, MIN_Y, HEIGHT } from './chunkGen.js';
+import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
 import { SEED, RENDER, TREES, DEBUG } from './config.js';
 import * as THREE from './three.module.js';
 
@@ -66,10 +66,13 @@ export default class ChunkManager {
     this.blockSize = options.blockSize ?? 1;
     this.viewDistance = options.viewDistance ?? RENDER.viewDistance;
     this.chunks = new Map(); // key -> { cx, cz, meshes, top, data }
+    this.showBorders = false;
+    this._borderHelpers = new Map(); // key -> Box3Helper
     if (DEBUG.logChunkLoading) console.log(`ChunkManager: init (seed=${this.seed}, blockSize=${this.blockSize}, viewDistance=${this.viewDistance})`);
     this.materials = this._createMaterials();
     // async load queue to avoid blocking the main thread
     this._loadQueue = [];
+    this._isProcessingQueue = false;
     this.maxLoadsPerFrame = options.maxLoadsPerFrame ?? RENDER.maxLoadsPerFrame;
   }
 
@@ -253,7 +256,21 @@ export default class ChunkManager {
     group.position.set(chunkWorldX, 0, chunkWorldZ);
 
     this.scene.add(group);
-    this.chunks.set(this._key(cx, cz), { cx, cz, group, top, data: chunk.data });
+    const key = this._key(cx, cz);
+    this.chunks.set(key, { cx, cz, group, top, data: chunk.data });
+    if (this.showBorders) {
+      try {
+        const box = new THREE.Box3(
+          new THREE.Vector3(chunkWorldX, MIN_Y * bs, chunkWorldZ),
+          new THREE.Vector3(chunkWorldX + CHUNK_SIZE * bs, MAX_Y * bs, chunkWorldZ + CHUNK_SIZE * bs)
+        );
+        const helper = new THREE.Box3Helper(box, 0xff0000);
+        this.scene.add(helper);
+        this._borderHelpers.set(key, helper);
+      } catch (e) {
+        console.warn('Failed to create Box3Helper for chunk borders', e);
+      }
+    }
   }
 
   _addTrees(chunk, cx, cz) {
@@ -623,15 +640,58 @@ export default class ChunkManager {
   processLoadQueue() {
     if (this._loadQueue.length === 0) return;
     
+    // Prevent concurrent processing
+    if (this._isProcessingQueue) return;
+    
     // Sort by priority (lower = closer = higher priority)
     this._loadQueue.sort((a, b) => a.priority - b.priority);
     
-    let count = 0;
-    while (this._loadQueue.length > 0 && count < this.maxLoadsPerFrame) {
+    // Use requestIdleCallback to only generate chunks when browser is idle
+    // This ensures FPS is never impacted by chunk generation
+    const processWhenIdle = (deadline) => {
+      // Only process if we have enough idle time (at least 10ms)
+      // or if the callback was triggered due to timeout
+      if (deadline.timeRemaining() < 10 && !deadline.didTimeout) {
+        // Not enough idle time, reschedule
+        if (this._loadQueue.length > 0) {
+          this._scheduleIdleProcess();
+        }
+        return;
+      }
+      
+      this._isProcessingQueue = true;
+      
+      // Process one chunk if we have idle time
       const item = this._loadQueue.shift();
-      try { this._loadChunk(item.cx, item.cz); } catch (e) { console.warn('Chunk load failed for', item.key, e); }
-      count++;
-    }
+      if (item && !this.chunks.has(item.key)) {
+        try { 
+          this._loadChunk(item.cx, item.cz); 
+        } catch (e) { 
+          console.warn('Chunk load failed for', item.key, e); 
+        }
+      }
+      
+      this._isProcessingQueue = false;
+      
+      // Schedule next chunk if queue not empty
+      if (this._loadQueue.length > 0) {
+        this._scheduleIdleProcess();
+      }
+    };
+    
+    this._scheduleIdleProcess = () => {
+      if (typeof requestIdleCallback !== 'undefined') {
+        // Use idle callback with 500ms timeout to ensure chunks eventually load
+        requestIdleCallback(processWhenIdle, { timeout: 500 });
+      } else {
+        // Fallback for browsers without requestIdleCallback
+        setTimeout(() => {
+          processWhenIdle({ timeRemaining: () => 50, didTimeout: true });
+        }, 50);
+      }
+    };
+    
+    this._scheduleIdleProcess();
   }
 
   _unloadChunk(cx, cz) {
@@ -648,6 +708,14 @@ export default class ChunkManager {
     
     this.scene.remove(rec.group);
     this.chunks.delete(key);
+    // Remove border helper if present
+    const helper = this._borderHelpers.get(key);
+    if (helper) {
+      this.scene.remove(helper);
+      if (helper.geometry) helper.geometry.dispose();
+      if (helper.material) helper.material.dispose();
+      this._borderHelpers.delete(key);
+    }
     if (DEBUG.logChunkLoading) console.log(`_unloadChunk: chunk ${cx},${cz} unloaded and removed`);
   }
 
@@ -821,10 +889,32 @@ export default class ChunkManager {
 
     // Dispose old geometries and remove from scene
     if (rec.group) {
-      rec.group.traverse((child) => {
-        if (child.isMesh && child.geometry) child.geometry.dispose();
-      });
+      // Remove all children from the group first
+      while (rec.group.children.length > 0) {
+        const child = rec.group.children[0];
+        rec.group.remove(child);
+        if (child.isMesh && child.geometry) {
+          child.geometry.dispose();
+        }
+      }
       this.scene.remove(rec.group);
+      rec.group = null;
+    }
+
+    // Recalculate the full top array to ensure it's accurate
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        let topY = MIN_Y - 1;
+        for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = rec.data[idx];
+          if (blockId !== BLOCK_AIR && !PASSABLE_BLOCKS.has(blockId)) {
+            topY = y;
+            break;
+          }
+        }
+        rec.top[x * CHUNK_SIZE + z] = topY;
+      }
     }
 
     // Build new meshes based on current data and top
@@ -838,5 +928,59 @@ export default class ChunkManager {
 
     this.scene.add(newGroup);
     rec.group = newGroup;
+    // Recreate border helper for rebuilt chunk if enabled
+    const oldHelper = this._borderHelpers.get(key);
+    if (oldHelper) {
+      this.scene.remove(oldHelper);
+      if (oldHelper.geometry) oldHelper.geometry.dispose();
+      if (oldHelper.material) oldHelper.material.dispose();
+      this._borderHelpers.delete(key);
+    }
+    if (this.showBorders) {
+      try {
+        const box = new THREE.Box3(
+          new THREE.Vector3(chunkWorldX, MIN_Y * bs, chunkWorldZ),
+          new THREE.Vector3(chunkWorldX + CHUNK_SIZE * bs, MAX_Y * bs, chunkWorldZ + CHUNK_SIZE * bs)
+        );
+        const helper = new THREE.Box3Helper(box, 0xff0000);
+        this.scene.add(helper);
+        this._borderHelpers.set(key, helper);
+      } catch (e) {
+        console.warn('Failed to recreate Box3Helper for chunk borders', e);
+      }
+    }
   }
+
+  // Toggle or set chunk border visibility. When enabled, a Box3Helper
+  // is created for each loaded chunk showing the full chunk boundaries and kept in sync on rebuilds.
+  showChunkBorders(enable = true) {
+    const want = !!enable;
+    if (want === this.showBorders) return;
+    this.showBorders = want;
+    if (this.showBorders) {
+      for (const [key, rec] of this.chunks.entries()) {
+        if (this._borderHelpers.has(key)) continue;
+        try {
+          const box = new THREE.Box3(
+            new THREE.Vector3(rec.cx * CHUNK_SIZE * this.blockSize, MIN_Y * this.blockSize, rec.cz * CHUNK_SIZE * this.blockSize),
+            new THREE.Vector3((rec.cx + 1) * CHUNK_SIZE * this.blockSize, MAX_Y * this.blockSize, (rec.cz + 1) * CHUNK_SIZE * this.blockSize)
+          );
+          const helper = new THREE.Box3Helper(box, 0xff0000);
+          this.scene.add(helper);
+          this._borderHelpers.set(key, helper);
+        } catch (e) {
+          console.warn('Failed to create Box3Helper for chunk borders', e);
+        }
+      }
+    } else {
+      for (const [key, helper] of this._borderHelpers.entries()) {
+        this.scene.remove(helper);
+        if (helper.geometry) helper.geometry.dispose();
+        if (helper.material) helper.material.dispose();
+      }
+      this._borderHelpers.clear();
+    }
+  }
+
+  toggleChunkBorders() { this.showChunkBorders(!this.showBorders); }
 }

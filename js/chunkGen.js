@@ -658,7 +658,8 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
     const localTreeDensity = clamp((treeNoise1 * 0.7 + treeNoise2 * 0.3 + 1) * 0.5, 0, 1);
     
     const biomeTreeDensity = getBiomeTreeDensity(biome);
-    const effectiveTreeProb = biomeTreeDensity * (0.3 + localTreeDensity * 1.4);
+    // Apply global treeProbability as an overall multiplier to allow config/opts control
+    const effectiveTreeProb = biomeTreeDensity * (0.3 + localTreeDensity * 1.4) * treeProbability;
     
     const treeRand = seededRandom(wx, wz, seed + 3000);
     if (treeRand >= effectiveTreeProb) return null;

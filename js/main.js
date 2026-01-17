@@ -73,7 +73,7 @@ function minimalTest() {
   const skyNight = new THREE.Color(DAY_NIGHT.skyNightColor);
   const skyColor = new THREE.Color(); // reusable for lerping
 
-  const cycleStart = performance.now() / 1000; // seconds
+  const cycleStart = performance.now() / 1000  + 1000; // seconds
 
   // Reusable vectors for sun/moon positioning (avoid allocations in render loop)
   const sunPos = new THREE.Vector3();
@@ -346,6 +346,10 @@ function minimalTest() {
       case 'F5':
         e.preventDefault();
         toggleThirdPerson();
+        break;
+      case 'KeyB':
+        // Toggle chunk borders (Box3Helpers showing full chunk boundaries)
+        try { cm.toggleChunkBorders(); } catch (err) { console.warn('toggleChunkBorders error', err); }
         break;
       case 'KeyW': move.forward = true; break;
       case 'KeyS': move.backward = true; break;
