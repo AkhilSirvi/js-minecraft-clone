@@ -91,8 +91,8 @@ export const PHYSICS = {
   terminalVelocity: -50, // max fall speed (blocks/s)
   
   // Movement
-  maxSpeed: 6,           // max horizontal speed (blocks/s)
-  sprintMultiplier: 1.6, // speed multiplier when sprinting
+  maxSpeed: 4.3,           // max horizontal speed (blocks/s)
+  sprintMultiplier: 1.3, // speed multiplier when sprinting
   crouchMultiplier: 0.4, // speed multiplier when crouching
   
   // Acceleration

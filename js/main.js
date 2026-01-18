@@ -1,5 +1,5 @@
 import * as THREE from './three.module.js';
-import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y } from './chunkGen.js';
+import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y, getBiomeAtWorld } from './chunkGen.js';
 import ChunkManager, { isBlockPassable } from './chunkManager.js';
 import { initInteraction } from './interaction.js';
 import createDebugOverlay from './debugOverlay.js';
@@ -12,36 +12,10 @@ import {
   CAMERA,
   DEBUG 
 } from './config.js';
+ 
 
-{
-  if (DEBUG.showStartupInfo) {
-    console.log('Game startup: beginning quick chunk sample');
-    console.log('Using seed:', SEED);
-  }
-  const seed = SEED;
-  const chunk = generateChunk(0, 0, seed);
-  if (DEBUG.showStartupInfo) {
-    console.log('Sample chunk generated');
-    console.log('Generated chunk (0,0) summary:', chunk.stats);
-  }
-  const heights = [];
-  for (let x = 0; x < CHUNK_SIZE; x++) {
-    for (let z = 0; z < 1; z++) {
-      let topY = null;
-      for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
-        const idx = ((x * CHUNK_SIZE + z) * HEIGHT) + (y - MIN_Y);
-        if (chunk.data[idx] !== 0) { topY = y; break; }
-      }
-      heights.push(topY === null ? null : topY);
-    }
-  }
-  if (DEBUG.showStartupInfo) {
-    console.log('Sample column top Y for x=0..15 (z=0):', heights);
-  }
-}
-
-function minimalTest() {
-  if (DEBUG.showStartupInfo) console.log('Initializing minimalTest renderer and scene');
+function main() {
+  if (DEBUG.showStartupInfo) console.log('Initializing renderer and scene');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(DAY_NIGHT.skyDayColor);
 
@@ -144,7 +118,7 @@ function minimalTest() {
   function resolvePlayerCollision() {
     const bs = blockSize;
     const maxPushDist = 2.0; // max distance to search for free space
-    const pushStep = 0.1;
+    const pushStep = 0.001;
     
     // If already free, nothing to do
     if (isPlayerPositionFree(player.position.x, player.position.y, player.position.z)) {
@@ -292,7 +266,7 @@ function minimalTest() {
   };
   window.tp = window.teleport;
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(DAY_NIGHT.skyDayColor, 1);
@@ -552,18 +526,35 @@ function minimalTest() {
       }
     }
     
-    // Ground collision
+    // Ground collision (sample multiple points within player radius so
+    // standing/jumping works when part of the player's feet are over an edge)
     const playerBottomY = player.position.y - currentPlayerHeight / 2;
-    const groundSurfaceY = cm.getGroundAtWorld(player.position.x, playerBottomY, player.position.z);
-    if (isFinite(groundSurfaceY)) {
-      if (playerBottomY < groundSurfaceY) {
-        player.position.y = groundSurfaceY + currentPlayerHeight / 2;
+    // sample center + offsets around the player's radius
+    const sampleRadius = Math.max(0.01, playerRadius * 0.9);
+    const diag = sampleRadius * 0.7071;
+    const samples = [
+      [0, 0],
+      [ sampleRadius, 0], [-sampleRadius, 0], [0, sampleRadius], [0, -sampleRadius],
+      [ diag,  diag], [ diag, -diag], [-diag,  diag], [-diag, -diag]
+    ];
+
+    let maxGroundY = -Infinity;
+    for (const [ox, oz] of samples) {
+      const sx = player.position.x + ox;
+      const sz = player.position.z + oz;
+      const gy = cm.getGroundAtWorld(sx, playerBottomY, sz);
+      if (isFinite(gy) && gy > maxGroundY) maxGroundY = gy;
+    }
+
+    if (isFinite(maxGroundY)) {
+      if (playerBottomY < maxGroundY) {
+        // player partially buried - snap up
+        player.position.y = maxGroundY + currentPlayerHeight / 2;
         velY = 0;
         onGround = true;
       } else {
-        // Small margin check for "on ground" detection (for jumping)
-        const groundCheckY = cm.getGroundAtWorld(player.position.x, playerBottomY - 0.05, player.position.z);
-        onGround = isFinite(groundCheckY) && (playerBottomY - groundCheckY) < 0.1;
+        // if any sampled ground is within a small threshold, consider onGround
+        onGround = (playerBottomY - maxGroundY) < 0.15;
       }
     } else {
       onGround = false;
@@ -686,8 +677,54 @@ function minimalTest() {
         const id = cm.getBlockAtWorld(p.x, p.y, p.z);
         targetInfo = { blockX: bx, blockY: by, blockZ: bz, id, dist };
       }
+      // Compute look vector, yaw/pitch and facing name
+      const lookVec = new THREE.Vector3();
+      camera.getWorldDirection(lookVec);
+      const yawRad = player.rotation.y || 0;
+      const pitchRad = pitchObject.rotation.x || 0;
+      const yawDeg = (yawRad * 180 / Math.PI) % 360;
+      const pitchDeg = (pitchRad * 180 / Math.PI) % 360;
+      // Facing name (coarse)
+      const normYaw = (yawDeg + 360) % 360;
+      let facingName = 'Unknown';
+      if (normYaw >= 315 || normYaw < 45) facingName = 'South (Towards +Z)';
+      else if (normYaw >= 45 && normYaw < 135) facingName = 'West (Towards -X)';
+      else if (normYaw >= 135 && normYaw < 225) facingName = 'North (Towards -Z)';
+      else facingName = 'East (Towards +X)';
+
+      // Head block id (block where player's eye is located)
+      const headY = player.position.y + currentPlayerHeight * CAMERA.eyeHeight;
+      const headBlockId = cm.getBlockAtWorld(player.position.x, headY, player.position.z);
+
+      // Simple client light estimate: sky light (exposed to sky?) and block light (nearby light sources)
+      const topY = cm.getTopAtWorld(player.position.x, player.position.z);
+      const skyLight = (topY <= Math.floor(player.position.y)) ? 15 : Math.max(0, 15 - (Math.floor(topY) - Math.floor(player.position.y)));
+      const blockLight = (targetInfo && targetInfo.id === 4) ? 5 : 0; // crude: if looking at water show some block light
+
+      // Renderer statistics
+      const rinfo = renderer.info || { memory: {}, render: {} };
+      const rendererStats = {
+        geometries: rinfo.memory.geometries || 0,
+        textures: rinfo.memory.textures || 0,
+        calls: rinfo.render.calls || 0,
+        triangles: rinfo.render.triangles || 0
+      };
       const mem = (performance && performance.memory) ? { usedMB: performance.memory.usedJSHeapSize/1024/1024, totalMB: performance.memory.jsHeapSizeLimit/1024/1024 } : null;
-      debugOverlay.update({ delta: frameDelta, playerPos: player.position, chunkX: Math.floor(player.position.x / (CHUNK_SIZE*blockSize)), chunkZ: Math.floor(player.position.z / (CHUNK_SIZE*blockSize)), target: targetInfo, loadedChunks: cm.chunks.size, memory: mem });
+      debugOverlay.update({
+        delta: frameDelta,
+        playerPos: player.position,
+        chunkX: Math.floor(player.position.x / (CHUNK_SIZE*blockSize)),
+        chunkZ: Math.floor(player.position.z / (CHUNK_SIZE*blockSize)),
+        target: targetInfo,
+        loadedChunks: cm.chunks.size,
+        memory: mem,
+        biome: getBiomeAtWorld(player.position.x, player.position.z, SEED),
+        lookVec,
+        facing: { name: facingName, yaw: yawDeg.toFixed(1), pitch: pitchDeg.toFixed(1) },
+        headBlockId,
+        clientLight: { sky: skyLight, block: blockLight },
+        rendererStats
+      });
     }
     // If third-person, make sure camera looks at player's head
     if (isThirdPerson) {
@@ -703,4 +740,4 @@ function minimalTest() {
 // mark startTime for first-frame log
 const startTimeMarker = performance.now();
 let prevTime = startTimeMarker;
-minimalTest();
+main();

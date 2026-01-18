@@ -898,3 +898,68 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
     biomeMap: new Uint8Array(biomeMapCache)
   };
 }
+
+// Exported helper: compute biome at arbitrary world coordinates using same noise parameters
+export function getBiomeAtWorld(wx, wz, seed = SEED, opts = {}) {
+  const perlin = createPerlin(seed);
+  const perlin2 = createPerlin(seed + 1000);
+  const perlin3 = createPerlin(seed + 2000);
+
+  const scale = opts.scale ?? TERRAIN.scale;
+  const octaves = opts.octaves ?? TERRAIN.octaves;
+  const persistence = opts.persistence ?? TERRAIN.persistence;
+  const lacunarity = opts.lacunarity ?? TERRAIN.lacunarity;
+  const amplitude = opts.amplitude ?? TERRAIN.amplitude;
+  const baseHeight = opts.baseHeight ?? TERRAIN.baseHeight;
+  const seaLevel = opts.seaLevel ?? TERRAIN.seaLevel;
+
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  // Compute warped temperature
+  const warpX = perlin2.octaveNoise(wx * 0.001, 0, wz * 0.001, 2, 0.5, 2.0) * 50;
+  const warpZ = perlin2.octaveNoise(wx * 0.001, 100, wz * 0.001, 2, 0.5, 2.0) * 50;
+  const tempNoise = perlin.octaveNoise((wx + warpX) * 0.0015, 0, (wz + warpZ) * 0.0015, 4, 0.5, 2.0);
+  const temperature = clamp((tempNoise + 1) * 0.5, 0, 1);
+
+  const humidWarpX = perlin.octaveNoise(wx * 0.0015, 50, wz * 0.0015, 2, 0.5, 2.0) * 40;
+  const humidWarpZ = perlin.octaveNoise(wx * 0.0015, 150, wz * 0.0015, 2, 0.5, 2.0) * 40;
+  const humidNoise = perlin2.octaveNoise((wx + humidWarpX) * 0.0025, 0, (wz + humidWarpZ) * 0.0025, 4, 0.5, 2.0);
+  const humidity = clamp((humidNoise + 1) * 0.5, 0, 1);
+
+  const contBase = perlin.octaveNoise(wx * 0.0008, 200, wz * 0.0008, 5, 0.55, 2.0);
+  const ridgeNoise = 1 - Math.abs(perlin2.octaveNoise(wx * 0.003, 300, wz * 0.003, 3, 0.5, 2.0));
+  const continentalness = clamp(contBase + 0.4 + ridgeNoise * ridgeNoise * 0.3, 0, 1.5);
+
+  const erosionNoise = perlin3.octaveNoise(wx * 0.004, 0, wz * 0.004, 3, 0.5, 2.0);
+  const erosion = clamp((erosionNoise + 1) * 0.5, 0, 1);
+
+  // compute approximate height at wx,wz (reuse approach from generateChunk.getHeightAt)
+  const noiseX = wx * scale;
+  const noiseZ = wz * scale;
+  const baseNoise = perlin.octaveNoise(noiseX, 0, noiseZ, octaves, persistence, lacunarity);
+  const detailNoise = perlin2.octaveNoise(wx * scale * 2.5, 0, wz * scale * 2.5, 3, 0.5, 2.0) * 0.25;
+
+  let continentHeight;
+  if (continentalness < 0.25) {
+    continentHeight = seaLevel - 20 - (0.25 - continentalness) * 40;
+  } else if (continentalness < 0.4) {
+    const t = (continentalness - 0.25) / 0.15;
+    continentHeight = (seaLevel - 20) + (seaLevel + 5 - (seaLevel - 20)) * (t * t * (3 - 2 * t));
+  } else if (continentalness < 0.8) {
+    const t = (continentalness - 0.4) / 0.4;
+    continentHeight = (seaLevel + 5) + (baseHeight + 20 - (seaLevel + 5)) * t;
+  } else {
+    const t = (continentalness - 0.8) / 0.5;
+    continentHeight = baseHeight + 20 + t * 50;
+  }
+
+  const height = Math.floor(clamp(continentHeight + (baseNoise + detailNoise) * amplitude * 0.4, MIN_Y, MAX_Y));
+
+  // call module-scope getBiome helper (declared above) to get numeric id
+  const biomeId = getBiome(temperature, humidity, continentalness, erosion, height, seaLevel);
+
+  // Map numeric ids to readable names using the internal BIOME const
+  const idToName = {};
+  for (const k of Object.keys(BIOME)) idToName[BIOME[k]] = k.charAt(0) + k.slice(1).toLowerCase();
+  return idToName[biomeId] || String(biomeId);
+}
