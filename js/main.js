@@ -3,16 +3,7 @@ import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y, getBiomeAtWorld } from './chu
 import ChunkManager, { isBlockPassable } from './chunkManager.js';
 import { initInteraction } from './interaction.js';
 import createDebugOverlay from './debugOverlay.js';
-import { 
-  SEED, 
-  PLAYER, 
-  PHYSICS, 
-  RENDER, 
-  DAY_NIGHT, 
-  CAMERA,
-  DEBUG 
-} from './config.js';
- 
+import { SEED, PLAYER, PHYSICS, RENDER, DAY_NIGHT, CAMERA, DEBUG } from './config.js';
 
 function main() {
   if (DEBUG.showStartupInfo) console.log('Initializing renderer and scene');
@@ -30,8 +21,8 @@ function main() {
   scene.add(moonLight);
 
   // visual sun and moon
-  const sunMesh = new THREE.Mesh(new THREE.SphereGeometry(DAY_NIGHT.sunSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.sunColor }));
-  const moonMesh = new THREE.Mesh(new THREE.SphereGeometry(DAY_NIGHT.moonSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.moonColor }));
+  const sunMesh = new THREE.Mesh(new THREE.BoxGeometry(1, DAY_NIGHT.sunSize, DAY_NIGHT.sunSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.sunColor }));
+  const moonMesh = new THREE.Mesh(new THREE.BoxGeometry(DAY_NIGHT.moonSize, DAY_NIGHT.moonSize, DAY_NIGHT.moonSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.moonColor }));
   scene.add(sunMesh);
   scene.add(moonMesh);
 
@@ -606,13 +597,13 @@ function main() {
     // compute sun angle around sky (0..CYCLE_LENGTH) -> angle -PI/2 .. 3PI/2
     const angle = (t / CYCLE_LENGTH) * Math.PI * 2 - Math.PI / 2;
     const sunDist = DAY_NIGHT.orbitDistance;
-    sunPos.set(Math.cos(angle) * sunDist, Math.sin(angle) * sunDist, Math.sin(angle * 0.5) * -200);
+    sunPos.set(Math.cos(angle) * sunDist + player.position.x, Math.sin(angle) * sunDist, Math.sin(angle * 0.5) * -200 + player.position.z);
     sunMesh.position.copy(sunPos);
     sunLight.position.copy(sunPos);
 
     // moon opposite the sun
     const moonAngle = angle + Math.PI;
-    moonPos.set(Math.cos(moonAngle) * sunDist, Math.sin(moonAngle) * sunDist, Math.sin(moonAngle * 0.5) * -200);
+    moonPos.set(Math.cos(moonAngle) * sunDist + player.position.x, Math.sin(moonAngle) * sunDist, Math.sin(moonAngle * 0.5) * -200 + player.position.z);
     moonMesh.position.copy(moonPos);
     moonLight.position.copy(moonPos);
 
@@ -663,19 +654,27 @@ function main() {
     // update debug overlay (throttled to reduce raycast overhead)
     if (showDebug && time - lastDebugUpdate > debugUpdateInterval) {
       lastDebugUpdate = time;
-      // target center of screen - limit raycast distance for performance
       raycaster.setFromCamera(tempVec2.set(0, 0), camera);
-      raycaster.far = 50; // Limit raycast distance
-      const intersects = raycaster.intersectObjects(scene.children, true);
+      raycaster.far = 50; 
       let targetInfo = null;
-      if (intersects.length > 0) {
-        const p = intersects[0].point;
-        const dist = intersects[0].distance;
-        const bx = Math.floor(p.x / blockSize);
-        const by = Math.floor((p.y - MIN_Y * blockSize) / blockSize) + MIN_Y;
-        const bz = Math.floor(p.z / blockSize);
-        const id = cm.getBlockAtWorld(p.x, p.y, p.z);
-        targetInfo = { blockX: bx, blockY: by, blockZ: bz, id, dist };
+      if (!targetInfo) {
+        camera.getWorldPosition(tempLocalPoint);
+        camera.getWorldDirection(tempWorldPoint);
+        const maxDist = raycaster.far || 50;
+        const step = 0.1; // smaller steps detect very-close blocks reliably
+        for (let d = 0; d <= maxDist; d += step) {
+          const sx = tempLocalPoint.x + tempWorldPoint.x * d;
+          const sy = tempLocalPoint.y + tempWorldPoint.y * d;
+          const sz = tempLocalPoint.z + tempWorldPoint.z * d;
+          const id2 = cm.getBlockAtWorld(sx, sy, sz);
+          if (id2 !== 0) {
+            const bx2 = Math.floor(sx / blockSize);
+            const by2 = Math.floor((sy - MIN_Y * blockSize) / blockSize) + MIN_Y;
+            const bz2 = Math.floor(sz / blockSize);
+            targetInfo = { blockX: bx2, blockY: by2, blockZ: bz2, id: id2, dist: d };
+            break;
+          }
+        }
       }
       // Compute look vector, yaw/pitch and facing name
       const lookVec = new THREE.Vector3();

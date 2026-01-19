@@ -784,6 +784,9 @@ export default class ChunkManager {
     const gx = Math.floor(worldX / bs);
     const gz = Math.floor(worldZ / bs);
     const startBlockY = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    // Clamp startBlockY to chunk height range to avoid indexing past chunk data
+    const maxBlockY = MIN_Y + HEIGHT - 1;
+    const startBlockYClamped = Math.min(startBlockY, maxBlockY);
     const cx = Math.floor(gx / CHUNK_SIZE);
     const cz = Math.floor(gz / CHUNK_SIZE);
     const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
@@ -796,7 +799,7 @@ export default class ChunkManager {
       if (!rec) return -Infinity;
     }
     // Scan downward from startBlockY to find the first solid (non-passable) block
-    for (let by = startBlockY; by >= MIN_Y; by--) {
+    for (let by = startBlockYClamped; by >= MIN_Y; by--) {
       const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (by - MIN_Y);
       const blockId = rec.data[idx];
       if (blockId !== 0 && !PASSABLE_BLOCKS.has(blockId)) {

@@ -135,7 +135,7 @@ export const DAY_NIGHT = {
   // Sun/Moon
   sunColor: 0xffee88,
   moonColor: 0xccccff,
-  sunSize: 8,
+  sunSize: 100,
   moonSize: 6,
   orbitDistance: 600,
 };
