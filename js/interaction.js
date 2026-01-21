@@ -42,7 +42,6 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
       const bid = cm.getBlockAtWorld(p.x, p.y, p.z);
 
       if (bid !== 0 && bid !== 14) {
-        // Hit a solid block at world position p
         const hx = Math.floor(p.x);
         const hy = Math.floor(p.y);
         const hz = Math.floor(p.z);
@@ -94,12 +93,12 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
   }
 
   function startPlacing() {
-    if (placeInterval) return; // Already placing
+    if (placeInterval) return;
     placeInterval = setInterval(() => {
       if (mouseButtons.right && document.pointerLockElement === domElement) {
         performAction({ button: 2 });
       }
-    }, 200); // Place block every 100ms while holding right click
+    }, 200);
   }
 
   function stopPlacing() {

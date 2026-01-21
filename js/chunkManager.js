@@ -992,8 +992,7 @@ export default class ChunkManager {
     }
   }
 
-  // Toggle or set chunk border visibility. When enabled, a Box3Helper
-  // is created for each loaded chunk showing the full chunk boundaries and kept in sync on rebuilds.
+  // Toggle or set chunk border visibility.
   showChunkBorders(enable = true) {
     const want = !!enable;
     if (want === this.showBorders) return;

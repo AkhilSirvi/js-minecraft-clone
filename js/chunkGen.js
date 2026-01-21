@@ -44,7 +44,6 @@ const BIOME_BLEND_RADIUS = 16;
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function lerp(a, b, t) { return a + (b - a) * clamp(t, 0, 1); }
 function smoothstep(t) { return t * t * (3 - 2 * t); }
-function smootherstep(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
 
 // Improved seeded random with better distribution
 function seededRandom(x, z, seed) {
@@ -59,44 +58,6 @@ function hash3(x, y, z) {
   let h = x * 374761393 + y * 668265263 + z * 1274126177;
   h = (h ^ (h >>> 13)) * 1103515245;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-// Voronoi-based biome blending for smoother transitions
-function getBlendedBiomeValue(x, z, seed, scale, getValue) {
-  const cellX = Math.floor(x * scale);
-  const cellZ = Math.floor(z * scale);
-  const fracX = (x * scale) - cellX;
-  const fracZ = (z * scale) - cellZ;
-  
-  let totalWeight = 0;
-  let blendedValue = 0;
-  
-  // Sample 3x3 grid of cells for smooth blending
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dz = -1; dz <= 1; dz++) {
-      const cx = cellX + dx;
-      const cz = cellZ + dz;
-      
-      // Get cell center with jitter
-      const jitterX = seededRandom(cx, cz, seed) * 0.6 + 0.2;
-      const jitterZ = seededRandom(cx, cz, seed + 1) * 0.6 + 0.2;
-      
-      const pointX = dx + jitterX - fracX;
-      const pointZ = dz + jitterZ - fracZ;
-      
-      // Distance-based weight with smooth falloff
-      const dist = Math.sqrt(pointX * pointX + pointZ * pointZ);
-      const weight = Math.max(0, 1 - dist * 0.7);
-      const smoothWeight = weight * weight * (3 - 2 * weight);
-      
-      if (smoothWeight > 0) {
-        blendedValue += getValue(cx, cz) * smoothWeight;
-        totalWeight += smoothWeight;
-      }
-    }
-  }
-  
-  return totalWeight > 0 ? blendedValue / totalWeight : getValue(cellX, cellZ);
 }
 
 // Determine biome with smooth transitions based on climate values

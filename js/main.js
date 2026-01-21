@@ -22,7 +22,7 @@ function main() {
 
   // visual sun and moon
   const sunMesh = new THREE.Mesh(new THREE.BoxGeometry(1, DAY_NIGHT.sunSize, DAY_NIGHT.sunSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.sunColor }));
-  const moonMesh = new THREE.Mesh(new THREE.BoxGeometry(DAY_NIGHT.moonSize, DAY_NIGHT.moonSize, DAY_NIGHT.moonSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.moonColor }));
+  const moonMesh = new THREE.Mesh(new THREE.BoxGeometry(1, DAY_NIGHT.moonSize, DAY_NIGHT.moonSize), new THREE.MeshBasicMaterial({ color: DAY_NIGHT.moonColor }));
   scene.add(sunMesh);
   scene.add(moonMesh);
 
@@ -711,12 +711,14 @@ function main() {
     sunPos.set(Math.cos(angle) * sunDist + player.position.x, Math.sin(angle) * sunDist, Math.sin(angle * 0.5) * -200 + player.position.z);
     sunMesh.position.copy(sunPos);
     sunLight.position.copy(sunPos);
+    sunMesh.rotation.set(0, 0, angle);
 
     // moon opposite the sun
     const moonAngle = angle + Math.PI;
     moonPos.set(Math.cos(moonAngle) * sunDist + player.position.x, Math.sin(moonAngle) * sunDist, Math.sin(moonAngle * 0.5) * -200 + player.position.z);
     moonMesh.position.copy(moonPos);
     moonLight.position.copy(moonPos);
+    moonMesh.rotation.set(0, 0, moonAngle);
 
     // determine phase: day, dusk, night, dawn (we split TRANSITION_TOTAL in half for dusk/dawn)
     let sunIntensity = 0;
