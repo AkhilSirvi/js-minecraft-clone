@@ -79,20 +79,31 @@ function main() {
   const tempLocalPoint = new THREE.Vector3();
   const tempWorldPoint = new THREE.Vector3();
   const tempVec2 = new THREE.Vector2();
-
-  // helper: test whether player's capsule/box at given world x,z and center y would intersect any solid block
+  
+  // helper: test whether player's rectangular box at given world x,z and center y would intersect any solid block
   function isPlayerPositionFree(testX, testY, testZ, height = null) {
-    // approximate player as vertical column from bottomY to topY and radius playerRadius
+    // Player as axis-aligned rectangular box from bottomY to topY with half-extents
     const bs = blockSize;
     const checkHeight = height !== null ? height : currentPlayerHeight;
-    const bottomY = testY - checkHeight / 2;
-    const topY = testY + checkHeight / 2;
-    const minBlockX = Math.floor((testX - playerRadius) / bs);
-    const maxBlockX = Math.floor((testX + playerRadius) / bs);
-    const minBlockZ = Math.floor((testZ - playerRadius) / bs);
-    const maxBlockZ = Math.floor((testZ + playerRadius) / bs);
-    const minBlockY = Math.floor((bottomY - MIN_Y * bs) / bs) + MIN_Y;
-    const maxBlockY = Math.floor((topY - MIN_Y * bs) / bs) + MIN_Y;
+    const halfHeight = checkHeight / 2;
+    const bottomY = testY - halfHeight;
+    const topY = testY + halfHeight;
+    
+    // Player AABB bounds
+    const playerMinX = testX - playerHalfWidth;
+    const playerMaxX = testX + playerHalfWidth;
+    const playerMinZ = testZ - playerHalfDepth;
+    const playerMaxZ = testZ + playerHalfDepth;
+    
+    // Get block range that could intersect (shrink slightly to avoid floating point edge issues)
+    const epsilon = 0.001;
+    const minBlockX = Math.floor((playerMinX + epsilon) / bs);
+    const maxBlockX = Math.floor((playerMaxX - epsilon) / bs);
+    const minBlockZ = Math.floor((playerMinZ + epsilon) / bs);
+    const maxBlockZ = Math.floor((playerMaxZ - epsilon) / bs);
+    const minBlockY = Math.floor((bottomY + epsilon - MIN_Y * bs) / bs) + MIN_Y;
+    const maxBlockY = Math.floor((topY - epsilon - MIN_Y * bs) / bs) + MIN_Y;
+    
     for (let bx = minBlockX; bx <= maxBlockX; bx++) {
       for (let bz = minBlockZ; bz <= maxBlockZ; bz++) {
         for (let by = minBlockY; by <= maxBlockY; by++) {
@@ -179,6 +190,10 @@ function main() {
   const playerWidth = blockSize * PLAYER.width;
   const playerRadius = playerWidth / 2;
   const playerHeight = blockSize * PLAYER.height;
+  
+  // Player hitbox half-extents for rectangular collision (width x height x depth)
+  const playerHalfWidth = playerWidth / 2;  // X half-extent
+  const playerHalfDepth = playerWidth / 2;  // Z half-extent (same as width for square hitbox)
 
   // third-person / first-person toggle state
   let isThirdPerson = false;
@@ -317,11 +332,37 @@ function main() {
         move.crouch = true; 
         break;
       case 'Space':
-        // jump if on ground (handled in animation loop)
+        // jump if on ground or very close to ground (coyote time for edge cases)
         e.preventDefault();
-        if (onGround && !isCrouching) {
-          velY = jumpSpeed;
-          onGround = false;
+        if (!isCrouching) {
+          // Allow jump if onGround OR if we just left ground (within a small time/distance)
+          // This helps with edge cases where player is at the very edge of a block
+          if (onGround || (velY <= 0 && velY > -2)) {
+            // Double-check we have ground beneath using rectangular samples
+            const bottomY = player.position.y - currentPlayerHeight / 2;
+            const hx = playerHalfWidth * 0.98;
+            const hz = playerHalfDepth * 0.98;
+            const jumpSamples = [
+              [0, 0], [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz],
+              [0, -hz], [0, hz], [-hx, 0], [hx, 0]
+            ];
+            let hasGroundNearby = onGround;
+            if (!hasGroundNearby) {
+              for (const [ox, oz] of jumpSamples) {
+                const sx = player.position.x + ox;
+                const sz = player.position.z + oz;
+                const gy = cm.getGroundAtWorld(sx, bottomY, sz);
+                if (isFinite(gy) && (bottomY - gy) < 0.35) {
+                  hasGroundNearby = true;
+                  break;
+                }
+              }
+            }
+            if (hasGroundNearby) {
+              velY = jumpSpeed;
+              onGround = false;
+            }
+          }
         }
         break;
     }
@@ -413,13 +454,28 @@ function main() {
       // Update camera position
       pitchObject.position.y = crouchingHeight * CAMERA.eyeHeight;
     } else if (!wantsToCrouch && isCrouching) {
-      // Try to stand up - check if there's room
+      // Try to stand up - check if there's room using rectangular hitbox
       const heightDiff = standingHeight - crouchingHeight;
       const newY = player.position.y + heightDiff / 2;
-      // Check if we can stand (head won't hit ceiling)
+      // Check if we can stand (head won't hit ceiling) at all corners
       const headY = newY + standingHeight / 2;
-      const headBlockId = cm.getBlockAtWorld(player.position.x, headY, player.position.z);
-      if (headBlockId === 0) {
+      const hx = playerHalfWidth * 0.95;
+      const hz = playerHalfDepth * 0.95;
+      const standSamples = [
+        [0, 0],
+        [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz]
+      ];
+      let canStand = true;
+      for (const [ox, oz] of standSamples) {
+        const sx = player.position.x + ox;
+        const sz = player.position.z + oz;
+        const headBlockId = cm.getBlockAtWorld(sx, headY, sz);
+        if (!isBlockPassable(headBlockId)) {
+          canStand = false;
+          break;
+        }
+      }
+      if (canStand) {
         // Can stand up
         isCrouching = false;
         currentPlayerHeight = standingHeight;
@@ -479,11 +535,40 @@ function main() {
     // Move horizontally with collision (axis-separated for wall sliding)
     const moveX = velocity.x * dt;
     const moveZ = velocity.z * dt;
+    // helper: get maximum ground Y under a position using rectangular corner/edge samples
+    function getMaxGroundAtPosition(px, pz, bottomY) {
+      // Sample at corners and edge midpoints of rectangular hitbox
+      const hx = playerHalfWidth * 0.95; // slightly inset to avoid edge issues
+      const hz = playerHalfDepth * 0.95;
+      const samplesLocal = [
+        [0, 0],                     // center
+        [-hx, -hz], [hx, -hz],      // front corners
+        [-hx, hz], [hx, hz],        // back corners
+        [0, -hz], [0, hz],          // front/back edge midpoints
+        [-hx, 0], [hx, 0]           // left/right edge midpoints
+      ];
+      let maxG = -Infinity;
+      for (const [ox, oz] of samplesLocal) {
+        const sx = px + ox;
+        const sz = pz + oz;
+        const gy = cm.getGroundAtWorld(sx, bottomY, sz);
+        if (isFinite(gy) && gy > maxG) maxG = gy;
+      }
+      return maxG;
+    }
     
     // Try X movement
     if (moveX !== 0) {
       const newX = player.position.x + moveX;
-      if (isPlayerPositionFree(newX, player.position.y, player.position.z)) {
+      // Prevent accidentally stepping off edges while crouching: require target ground not to drop far
+      const currentBottomY = player.position.y - currentPlayerHeight / 2;
+      const currentMaxGround = getMaxGroundAtPosition(player.position.x, player.position.z, currentBottomY);
+      const targetMaxGround = getMaxGroundAtPosition(newX, player.position.z, currentBottomY);
+      const CROUCH_MAX_DROP = 0.5; // blocks - max allowed drop when crouching
+      if (isCrouching && isFinite(currentMaxGround) && isFinite(targetMaxGround) && (currentMaxGround - targetMaxGround) > CROUCH_MAX_DROP) {
+        // Block horizontal movement to avoid falling off edge while crouched
+        velocity.x = 0;
+      } else if (isPlayerPositionFree(newX, player.position.y, player.position.z)) {
         player.position.x = newX;
       } else {
         velocity.x = 0; // Hit wall, stop X velocity
@@ -493,7 +578,14 @@ function main() {
     // Try Z movement
     if (moveZ !== 0) {
       const newZ = player.position.z + moveZ;
-      if (isPlayerPositionFree(player.position.x, player.position.y, newZ)) {
+      // Prevent accidentally stepping off edges while crouching
+      const currentBottomYz = player.position.y - currentPlayerHeight / 2;
+      const currentMaxGroundZ = getMaxGroundAtPosition(player.position.x, player.position.z, currentBottomYz);
+      const targetMaxGroundZ = getMaxGroundAtPosition(player.position.x, newZ, currentBottomYz);
+      const CROUCH_MAX_DROP_Z = 0.5;
+      if (isCrouching && isFinite(currentMaxGroundZ) && isFinite(targetMaxGroundZ) && (currentMaxGroundZ - targetMaxGroundZ) > CROUCH_MAX_DROP_Z) {
+        velocity.z = 0;
+      } else if (isPlayerPositionFree(player.position.x, player.position.y, newZ)) {
         player.position.z = newZ;
       } else {
         velocity.z = 0; // Hit wall, stop Z velocity
@@ -504,29 +596,46 @@ function main() {
     const moveY = velY * dt;
     player.position.y += moveY;
     
-    // Ceiling collision
+    // Ceiling collision - check all corners of rectangular hitbox
     if (velY > 0) {
       const playerTopY = player.position.y + currentPlayerHeight / 2;
-      const headBlockId = cm.getBlockAtWorld(player.position.x, playerTopY, player.position.z);
-      if (headBlockId !== 0) {
-        const bs = blockSize;
-        const gyBlock = Math.floor((playerTopY - MIN_Y * bs) / bs) + MIN_Y;
-        const blockBottomWorldY = gyBlock * bs;
-        player.position.y = blockBottomWorldY - 0.001 - currentPlayerHeight / 2;
+      const hx = playerHalfWidth * 0.95;
+      const hz = playerHalfDepth * 0.95;
+      const ceilingSamples = [
+        [0, 0],
+        [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz]
+      ];
+      let hitCeiling = false;
+      let lowestCeilingY = Infinity;
+      for (const [ox, oz] of ceilingSamples) {
+        const sx = player.position.x + ox;
+        const sz = player.position.z + oz;
+        const headBlockId = cm.getBlockAtWorld(sx, playerTopY, sz);
+        if (!isBlockPassable(headBlockId)) {
+          hitCeiling = true;
+          const bs = blockSize;
+          const gyBlock = Math.floor((playerTopY - MIN_Y * bs) / bs) + MIN_Y;
+          const blockBottomWorldY = gyBlock * bs;
+          if (blockBottomWorldY < lowestCeilingY) lowestCeilingY = blockBottomWorldY;
+        }
+      }
+      if (hitCeiling) {
+        player.position.y = lowestCeilingY - 0.001 - currentPlayerHeight / 2;
         velY = 0;
       }
     }
     
-    // Ground collision (sample multiple points within player radius so
-    // standing/jumping works when part of the player's feet are over an edge)
+    // Ground collision using rectangular hitbox corners and edges
     const playerBottomY = player.position.y - currentPlayerHeight / 2;
-    // sample center + offsets around the player's radius
-    const sampleRadius = Math.max(0.01, playerRadius * 0.9);
-    const diag = sampleRadius * 0.7071;
+    // Sample at corners and edge midpoints of rectangular hitbox
+    const hx = playerHalfWidth * 0.98; // slightly inset to avoid floating point edge issues
+    const hz = playerHalfDepth * 0.98;
     const samples = [
-      [0, 0],
-      [ sampleRadius, 0], [-sampleRadius, 0], [0, sampleRadius], [0, -sampleRadius],
-      [ diag,  diag], [ diag, -diag], [-diag,  diag], [-diag, -diag]
+      [0, 0],                     // center
+      [-hx, -hz], [hx, -hz],      // front corners
+      [-hx, hz], [hx, hz],        // back corners
+      [0, -hz], [0, hz],          // front/back edge midpoints
+      [-hx, 0], [hx, 0]           // left/right edge midpoints
     ];
 
     let maxGroundY = -Infinity;
@@ -544,8 +653,10 @@ function main() {
         velY = 0;
         onGround = true;
       } else {
-        // if any sampled ground is within a small threshold, consider onGround
-        onGround = (playerBottomY - maxGroundY) < 0.15;
+        // Use a more generous threshold for onGround detection to fix edge jumping
+        // Also check if we're falling (velY < 0) to be more lenient
+        const groundThreshold = velY <= 0 ? 0.25 : 0.1;
+        onGround = (playerBottomY - maxGroundY) < groundThreshold;
       }
     } else {
       onGround = false;
@@ -738,5 +849,4 @@ function main() {
 
 // mark startTime for first-frame log
 const startTimeMarker = performance.now();
-let prevTime = startTimeMarker;
 main();

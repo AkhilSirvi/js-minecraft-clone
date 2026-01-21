@@ -76,6 +76,30 @@ export default class ChunkManager {
     this.maxLoadsPerFrame = options.maxLoadsPerFrame ?? RENDER.maxLoadsPerFrame;
   }
 
+  // Compute a deterministic 0..3 rotation for a block at global block coords
+  _rotFromSeed(gx, gy, gz) {
+    // Mix seed and coordinates into a 32-bit hash, then take lowest 2 bits
+    let h = (this.seed >>> 0);
+    h = (h ^ ((gx * 374761393) >>> 0)) >>> 0;
+    h = (h ^ ((gz * 668265263) >>> 0)) >>> 0;
+    h = (h ^ ((gy * 2139062143) >>> 0)) >>> 0;
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = Math.imul(h, 0x85ebca6b) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h & 3; // 0..3
+  }
+
+  // Rotate a single UV pair (u,v) by 90deg clockwise `rot` times around texture center
+  _rotateUVPair(u, v, rot) {
+    let ru = u, rv = v;
+    for (let i = 0; i < rot; i++) {
+      const nu = rv;
+      const nv = 1 - ru;
+      ru = nu; rv = nv;
+    }
+    return [ru, rv];
+  }
+
   _createMaterials() {
     const loader = new THREE.TextureLoader();
     const nearest = THREE.NearestFilter;
@@ -435,10 +459,21 @@ export default class ChunkManager {
             const worldY = y * bs;
             const worldZ = z * bs;
 
+            // Compute deterministic UV rotation for top faces (+Y)
+            let uvRot = 0;
+            if (faceIdx === 2) {
+              // global block coordinates (in blocks, not world units)
+              const globalBlockX = cx * CHUNK_SIZE + x;
+              const globalBlockY = y;
+              const globalBlockZ = cz * CHUNK_SIZE + z;
+              uvRot = this._rotFromSeed(globalBlockX, globalBlockY, globalBlockZ);
+            }
+
             faceLists[matKey].push({
               x: worldX, y: worldY, z: worldZ,
               corners: corners,
-              faceIdx: faceIdx
+              faceIdx: faceIdx,
+              uvRot: uvRot
             });
           }
         }
@@ -509,7 +544,9 @@ export default class ChunkManager {
             face.z + c[2] * this.blockSize
           );
           normals.push(dir[0], dir[1], dir[2]);
-          uvs.push(faceUVs[i][0], faceUVs[i][1]);
+          const rot = face.uvRot || 0;
+          const [ru, rv] = this._rotateUVPair(faceUVs[i][0], faceUVs[i][1], rot);
+          uvs.push(ru, rv);
         }
 
         // Add 2 triangles (6 indices)

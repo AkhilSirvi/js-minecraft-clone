@@ -1,27 +1,38 @@
 import * as THREE from './three.module.js';
-import { isBlockPassable } from './chunkManager.js';
 import { PLAYER, CAMERA } from './config.js';
 
 // Initialize mouse interactions for mining (left click) and placing (right click)
 export function initInteraction(cm, camera, domElement, opts = {}) {
   const reach = opts.reach ?? 6.0;
   let placeBlockId = opts.placeBlockId ?? 2; // default to dirt
+  const mouseButtons = { left: false, right: false };
+  let placeInterval = null;
+  const onContextMenu = (e) => e.preventDefault();
+  const onMouseDown = (evt) => {
+    if (evt.button === 0) {
+      performAction(evt);
+    } else if (evt.button === 2) {
+      performAction(evt);
+      mouseButtons.right = true;
+      startPlacing();
+    }
+  };
+  const onMouseUp = (evt) => {
+    if (evt.button === 2) {
+      mouseButtons.right = false;
+      stopPlacing();
+    }
+  };
 
-  // prevent context menu on right click
-  domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+  domElement.addEventListener('contextmenu', onContextMenu);
 
   function performAction(evt) {
-    // Require pointer lock for interactions (consistent with mouse look)
     if (document.pointerLockElement !== domElement) return;
-
     const button = evt.button; // 0 = left (break), 2 = right (place)
     if (button !== 0 && button !== 2) return;
-
-    // Ray-march from camera position along view direction
     const origin = camera.getWorldPosition(new THREE.Vector3());
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
-
     const step = 0.1;
     const maxT = reach;
     const prev = origin.clone();
@@ -44,10 +55,7 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
           const px = Math.floor(prev.x);
           const py = Math.floor(prev.y);
           const pz = Math.floor(prev.z);
-
-          // Check if the block would intersect the player's bounding box
-          // Camera world position corresponds to player's eye position
-          const camPos = origin; // already obtained above
+          const camPos = origin;
           const playerHeight = PLAYER.height;
           const playerWidth = PLAYER.width;
           const playerCenterY = camPos.y - (playerHeight * CAMERA.eyeHeight);
@@ -85,12 +93,32 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
     }
   }
 
-  domElement.addEventListener('mousedown', performAction);
+  function startPlacing() {
+    if (placeInterval) return; // Already placing
+    placeInterval = setInterval(() => {
+      if (mouseButtons.right && document.pointerLockElement === domElement) {
+        performAction({ button: 2 });
+      }
+    }, 200); // Place block every 100ms while holding right click
+  }
+
+  function stopPlacing() {
+    if (placeInterval) {
+      clearInterval(placeInterval);
+      placeInterval = null;
+    }
+  }
+
+  domElement.addEventListener('mousedown', onMouseDown);
+  domElement.addEventListener('mouseup', onMouseUp);
 
   return {
     setPlaceBlock(id) { placeBlockId = id; },
     dispose() {
-      domElement.removeEventListener('mousedown', performAction);
+      stopPlacing();
+      domElement.removeEventListener('contextmenu', onContextMenu);
+      domElement.removeEventListener('mousedown', onMouseDown);
+      domElement.removeEventListener('mouseup', onMouseUp);
     }
   };
 }
