@@ -86,7 +86,7 @@ export const PLAYER = {
 // ============================================
 
 export const PHYSICS = {
-  gravity: -32,          // blocks/s² (negative = down)
+  gravity: -31.36,          // blocks/s² (negative = down)
   jumpSpeed: 9,          // initial jump velocity (blocks/s)
   terminalVelocity: -50, // max fall speed (blocks/s)
   

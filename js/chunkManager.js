@@ -74,6 +74,35 @@ export default class ChunkManager {
     this._loadQueue = [];
     this._isProcessingQueue = false;
     this.maxLoadsPerFrame = options.maxLoadsPerFrame ?? RENDER.maxLoadsPerFrame;
+    // Worker for chunk generation to avoid main-thread spikes
+    try {
+      this._chunkWorker = new Worker('js/chunkWorker.js', { type: 'module' });
+      this._pendingRequests = new Map(); // key -> { key, cx, cz, priority }
+      this._chunkWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg && msg.error) {
+          console.warn('Chunk worker error:', msg.error);
+          return;
+        }
+        const key = this._key(msg.cx, msg.cz);
+        const pending = this._pendingRequests.get(key);
+        this._pendingRequests.delete(key);
+        if (!pending) return; // no longer needed
+
+        // Reconstruct typed arrays from transferred buffers
+        const chunk = { data: null, heightMap: null, biomeMap: null };
+        if (msg.data) chunk.data = new Uint8Array(msg.data);
+        if (msg.heightMap) chunk.heightMap = new Int16Array(msg.heightMap);
+        if (msg.biomeMap) chunk.biomeMap = new Uint8Array(msg.biomeMap);
+
+        // Finalize chunk on main thread (build mesh, add to scene)
+        this._finalizeChunkFromWorker(chunk, pending.cx, pending.cz);
+      };
+    } catch (e) {
+      // Worker not supported or failed to construct — fall back to main-thread generation
+      this._chunkWorker = null;
+      this._pendingRequests = new Map();
+    }
   }
 
   // Compute a deterministic 0..3 rotation for a block at global block coords
@@ -244,11 +273,17 @@ export default class ChunkManager {
   }
 
   _loadChunk(cx, cz) {
+    // Legacy synchronous load (fallback). Prefer worker pipeline.
     const chunk = generateChunk(cx, cz, this.seed);
+    this._finalizeChunkFromWorker(chunk, cx, cz);
+  }
+
+  // Finalize chunk data received/generated off-main-thread: compute top, build meshes, add to scene
+  _finalizeChunkFromWorker(chunk, cx, cz) {
     const bs = this.blockSize;
 
-    // Add trees to chunk data
-    this._addTrees(chunk, cx, cz);
+    // If chunk missing, abort
+    if (!chunk || !chunk.data) return;
 
     // Compute top array for collision and rendering (highest non-air block)
     const top = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
@@ -258,11 +293,7 @@ export default class ChunkManager {
         for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
           const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
           const blockId = chunk.data[idx];
-          // Count all non-air blocks for top (including passable like water)
-          if (blockId !== BLOCK_AIR) { 
-            topY = y; 
-            break; 
-          }
+          if (blockId !== BLOCK_AIR) { topY = y; break; }
         }
         top[x * CHUNK_SIZE + z] = topY;
       }
@@ -270,11 +301,9 @@ export default class ChunkManager {
 
     // Build optimized mesh with face culling
     const meshes = this._buildChunkMesh(chunk, cx, cz, top);
-    
     const group = new THREE.Group();
-    for (const mesh of meshes) {
-      group.add(mesh);
-    }
+    for (const mesh of meshes) group.add(mesh);
+
     // Position the chunk group at its world origin so geometry can be local
     const chunkWorldX = cx * CHUNK_SIZE * bs;
     const chunkWorldZ = cz * CHUNK_SIZE * bs;
@@ -669,7 +698,13 @@ export default class ChunkManager {
     if (this.chunks.has(key)) return;
     // avoid duplicate queue entries
     for (let i = 0; i < this._loadQueue.length; i++) {
-      if (this._loadQueue[i].key === key) return;
+      if (this._loadQueue[i].key === key) {
+        // If already queued, update its priority if the new one is closer (smaller)
+        if (priority < this._loadQueue[i].priority) {
+          this._loadQueue[i].priority = priority;
+        }
+        return;
+      }
     }
     this._loadQueue.push({ key, cx, cz, priority });
   }
@@ -702,10 +737,21 @@ export default class ChunkManager {
       // Process one chunk if we have idle time
       const item = this._loadQueue.shift();
       if (item && !this.chunks.has(item.key)) {
-        try { 
-          this._loadChunk(item.cx, item.cz); 
-        } catch (e) { 
-          console.warn('Chunk load failed for', item.key, e); 
+        try {
+          // If worker is available, request generation off-main-thread
+          if (this._chunkWorker) {
+            const key = item.key;
+            // Avoid duplicate pending requests
+            if (!this._pendingRequests.has(key)) {
+              this._pendingRequests.set(key, item);
+              this._chunkWorker.postMessage({ cx: item.cx, cz: item.cz, seed: this.seed, opts: {} });
+            }
+          } else {
+            // Fallback to synchronous generation
+            this._loadChunk(item.cx, item.cz);
+          }
+        } catch (e) {
+          console.warn('Chunk load failed for', item.key, e);
         }
       }
       

@@ -874,7 +874,8 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       }
     }
     
-    // Place leaves (can extend into this chunk from neighboring chunks)
+    // If the tree origin isn't inside this chunk, skip placing leaves here.
+    if (!isInChunk) continue;
     const leafStart = biome === BIOME.SAVANNA ? treeHeight - 1 : treeHeight - 2;
     const leafEnd = biome === BIOME.SAVANNA ? treeHeight + 2 : treeHeight + 3;
     

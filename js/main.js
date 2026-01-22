@@ -38,7 +38,7 @@ function main() {
   const skyNight = new THREE.Color(DAY_NIGHT.skyNightColor);
   const skyColor = new THREE.Color(); // reusable for lerping
 
-  const cycleStart = performance.now() / 1000  + 1000; // seconds
+  const cycleStart = performance.now() / 1000  - 320; // seconds
 
   // Reusable vectors for sun/moon positioning (avoid allocations in render loop)
   const sunPos = new THREE.Vector3();
@@ -234,6 +234,55 @@ function main() {
   pitchObject.position.y = playerHeight * CAMERA.eyeHeight; // camera near top of player's head
   pitchObject.add(camera);
   player.add(pitchObject);
+
+  // Keep third-person camera from clipping through world blocks.
+  function updateThirdPersonCameraCollision() {
+    if (!isThirdPerson) return;
+    // head/eye world position
+    const headWorld = new THREE.Vector3(player.position.x, player.position.y + currentPlayerHeight * CAMERA.eyeHeight, player.position.z);
+    // desired camera local position relative to pitchObject
+    const desiredLocal = tpCameraLocalPos.clone();
+    // convert to world space (accounts for player yaw and camera pitch)
+    const desiredWorld = desiredLocal.clone();
+    pitchObject.localToWorld(desiredWorld);
+
+    const dir = desiredWorld.clone().sub(headWorld);
+    const dist = dir.length();
+    if (dist <= 0.0001) { camera.position.copy(tpCameraLocalPos); return; }
+    dir.normalize();
+
+    // Step along the ray from the eye to the desired camera position and find first blocking block
+    const step = 0.1; // meters per sample
+    let lastFree = headWorld.clone();
+    let blocked = false;
+    for (let d = 0; d <= dist; d += step) {
+      const sx = headWorld.x + dir.x * d;
+      const sy = headWorld.y + dir.y * d;
+      const sz = headWorld.z + dir.z * d;
+      const id = cm.getBlockAtWorld(sx, sy, sz);
+      if (!isBlockPassable(id)) { blocked = true; break; }
+      lastFree.set(sx, sy, sz);
+    }
+
+    // Ensure camera keeps a small offset from blocking geometry and from the player's head
+    const MIN_DIST = 0.5;
+    const BACKOFF = 0.25;
+    let finalWorld = desiredWorld;
+    if (blocked) {
+      const toLast = lastFree.clone().sub(headWorld);
+      const len = toLast.length();
+      if (len < MIN_DIST) {
+        finalWorld = headWorld.clone().add(dir.clone().multiplyScalar(MIN_DIST));
+      } else {
+        finalWorld = lastFree.clone().add(dir.clone().multiplyScalar(-BACKOFF));
+      }
+    }
+
+    // Convert selected world position back into pitchObject-local coordinates and apply
+    const newLocal = finalWorld.clone();
+    pitchObject.worldToLocal(newLocal);
+    camera.position.copy(newLocal);
+  }
 
   // Console teleport command: use in DevTools console: `teleport(x,y,z)` or `tp(x,y,z)`
   // If `y` is omitted, teleport to top of terrain at x,z. Pass `opts = { safe: false }` to skip searching for free space.
@@ -838,8 +887,9 @@ function main() {
         rendererStats
       });
     }
-    // If third-person, make sure camera looks at player's head
+    // If third-person, update camera position with collision and make it look at player's head
     if (isThirdPerson) {
+      updateThirdPersonCameraCollision();
       const lookY = player.position.y + currentPlayerHeight * CAMERA.eyeHeight;
       camera.lookAt(player.position.x, lookY, player.position.z);
     }
