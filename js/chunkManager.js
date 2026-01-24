@@ -136,8 +136,9 @@ export default class ChunkManager {
     // Helper to load and configure texture
     const loadTex = (path) => {
       const tex = loader.load(path);
-      tex.magFilter = nearest;
-      tex.minFilter = THREE.NearestMipMapNearestFilter;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
       return tex;
     };
 

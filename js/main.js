@@ -321,7 +321,8 @@ function main() {
   };
   window.tp = window.teleport;
 
-  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: false , alpha: false });
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(DAY_NIGHT.skyDayColor, 1);
@@ -848,9 +849,9 @@ function main() {
       // Facing name (coarse)
       const normYaw = (yawDeg + 360) % 360;
       let facingName = 'Unknown';
-      if (normYaw >= 315 || normYaw < 45) facingName = 'South (Towards +Z)';
+      if (normYaw >= 315 || normYaw < 45) facingName = 'South (Towards -Z)';
       else if (normYaw >= 45 && normYaw < 135) facingName = 'West (Towards -X)';
-      else if (normYaw >= 135 && normYaw < 225) facingName = 'North (Towards -Z)';
+      else if (normYaw >= 135 && normYaw < 225) facingName = 'North (Towards +Z)';
       else facingName = 'East (Towards +X)';
 
       // Head block id (block where player's eye is located)
