@@ -50,41 +50,54 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
           // Break block
           cm.setBlockAtWorld(hx + 0.5, hy + 0.5, hz + 0.5, 0);
         } else if (button === 2) {
-          // Place block at previous empty position (but prevent placing inside player)
-          const px = Math.floor(prev.x);
-          const py = Math.floor(prev.y);
-          const pz = Math.floor(prev.z);
-          const camPos = origin;
-          const playerHeight = PLAYER.height;
-          const playerWidth = PLAYER.width;
-          const playerCenterY = camPos.y - (playerHeight * CAMERA.eyeHeight);
-          const halfH = playerHeight / 2;
-          const rad = playerWidth / 2;
+            // Place block at previous empty position.
+            // Use an optional runtime player AABB getter (passed via opts.getPlayerAABB)
+            // so crouch/height changes in `main.js` are respected. Fallback to
+            // conservative estimate using `PLAYER`/`CAMERA` constants.
+            const px = Math.floor(prev.x);
+            const py = Math.floor(prev.y);
+            const pz = Math.floor(prev.z);
+            const camPos = origin;
 
-          const blockMinX = px;
-          const blockMaxX = px + 1;
-          const blockMinY = py;
-          const blockMaxY = py + 1;
-          const blockMinZ = pz;
-          const blockMaxZ = pz + 1;
+            let playerAABB;
+            if (typeof opts.getPlayerAABB === 'function') {
+              // Expect { minX,maxX,minY,maxY,minZ,maxZ }
+              playerAABB = opts.getPlayerAABB();
+            } else {
+              const playerHeight = PLAYER.height;
+              const playerWidth = PLAYER.width;
+              const playerCenterY = camPos.y - (playerHeight * CAMERA.eyeHeight);
+              const halfH = playerHeight / 2;
+              const rad = playerWidth / 2;
+              playerAABB = {
+                minX: camPos.x - rad,
+                maxX: camPos.x + rad,
+                minY: playerCenterY - halfH,
+                maxY: playerCenterY + halfH,
+                minZ: camPos.z - rad,
+                maxZ: camPos.z + rad
+              };
+            }
 
-          const playerMinX = camPos.x - rad;
-          const playerMaxX = camPos.x + rad;
-          const playerMinY = playerCenterY - halfH;
-          const playerMaxY = playerCenterY + halfH;
-          const playerMinZ = camPos.z - rad;
-          const playerMaxZ = camPos.z + rad;
+            const blockMinX = px;
+            const blockMaxX = px + 1;
+            const blockMinY = py;
+            const blockMaxY = py + 1;
+            const blockMinZ = pz;
+            const blockMaxZ = pz + 1;
 
-          const intersects = !(blockMaxX <= playerMinX || blockMinX >= playerMaxX ||
-                               blockMaxY <= playerMinY || blockMinY >= playerMaxY ||
-                               blockMaxZ <= playerMinZ || blockMinZ >= playerMaxZ);
+            const intersects = !(
+              blockMaxX <= playerAABB.minX || blockMinX >= playerAABB.maxX ||
+              blockMaxY <= playerAABB.minY || blockMinY >= playerAABB.maxY ||
+              blockMaxZ <= playerAABB.minZ || blockMinZ >= playerAABB.maxZ
+            );
 
-          if (intersects) {
-            // Don't place block where it would intersect the player
-            return;
-          }
+            if (intersects) {
+              // Don't place block where it would intersect the player
+              return;
+            }
 
-          cm.setBlockAtWorld(px + 0.5, py + 0.5, pz + 0.5, placeBlockId);
+            cm.setBlockAtWorld(px + 0.5, py + 0.5, pz + 0.5, placeBlockId);
         }
         return;
       }

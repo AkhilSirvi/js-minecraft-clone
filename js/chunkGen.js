@@ -39,7 +39,7 @@ const vegetationDensityCache = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
 const treeDensityCache = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
 
 // Biome blending radius - how far to sample for smooth transitions
-const BIOME_BLEND_RADIUS = 16;
+const BIOME_BLEND_RADIUS = BIOMES.blendDistance; // in blocks
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function lerp(a, b, t) { return a + (b - a) * clamp(t, 0, 1); }

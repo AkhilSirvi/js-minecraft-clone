@@ -43,7 +43,7 @@ export const BIOMES = {
   erosionScale: 0.004,       // Local terrain roughness variation
   vegetationScale: 0.8,     // Fine-grained vegetation patches
   treeClusterScale: 0.025,   // Medium-grained tree clustering
-  blendDistance: 160,         // Blocks for biome blending
+  blendDistance: 16,         // Blocks for biome blending
 };
 
 // Ore generation - [minY, maxY, veinSize, rarity]
@@ -93,7 +93,7 @@ export const PHYSICS = {
   // Movement
   maxSpeed: 4.317,           // max horizontal speed (blocks/s)
   sprintMultiplier: 1.428, // speed multiplier when sprinting
-  crouchMultiplier: 0.4, // speed multiplier when crouching
+  crouchMultiplier: 0.3, // speed multiplier when crouching
   
   // Acceleration
   groundAccel: 50,       // ground acceleration (blocks/s²)

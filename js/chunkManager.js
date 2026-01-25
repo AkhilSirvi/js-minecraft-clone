@@ -285,6 +285,9 @@ export default class ChunkManager {
 
     // If chunk missing, abort
     if (!chunk || !chunk.data) return;
+    // If a chunk with this key is already present, skip
+    const fKey = this._key(cx, cz);
+    if (this.chunks.has(fKey)) return;
 
     // Compute top array for collision and rendering (highest non-air block)
     const top = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);

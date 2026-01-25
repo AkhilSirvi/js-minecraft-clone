@@ -62,7 +62,6 @@ function main() {
   const cm = new ChunkManager(scene, { seed: SEED, blockSize, viewDistance: RENDER.viewDistance });
   // initial load around origin
   if (DEBUG.showStartupInfo) console.log('Initial chunk load around origin starting');
-  cm.update(0, 0);
   if (DEBUG.showStartupInfo) console.log('Initial chunk load completed');
 
   // Debug overlay (F3)
@@ -341,7 +340,19 @@ function main() {
   });
 
   // Initialize interaction (mining/placing)
-  const interaction = initInteraction(cm, camera, renderer.domElement, { placeBlockId: 2, reach: 6 });
+  const interaction = initInteraction(cm, camera, renderer.domElement, {
+    placeBlockId: 2,
+    reach: 6,
+    // Provide current player AABB so interaction can respect crouch/height changes
+    getPlayerAABB: () => ({
+      minX: player.position.x - playerHalfWidth,
+      maxX: player.position.x + playerHalfWidth,
+      minY: player.position.y - currentPlayerHeight / 2,
+      maxY: player.position.y + currentPlayerHeight / 2,
+      minZ: player.position.z - playerHalfDepth,
+      maxZ: player.position.z + playerHalfDepth
+    })
+  });
 
   // Movement state
   const move = { forward: false, backward: false, left: false, right: false, sprint: false, crouch: false };
