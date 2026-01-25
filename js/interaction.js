@@ -41,23 +41,29 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
       const p = origin.clone().addScaledVector(dir, t);
       const bid = cm.getBlockAtWorld(p.x, p.y, p.z);
 
-      if (bid !== 0 && bid !== 14) {
+      if (bid !== 0) {
         const hx = Math.floor(p.x);
         const hy = Math.floor(p.y);
         const hz = Math.floor(p.z);
 
-        if (button === 0) {
+        if (button === 0 && bid !== 14) {
           // Break block
           cm.setBlockAtWorld(hx + 0.5, hy + 0.5, hz + 0.5, 0);
         } else if (button === 2) {
-            // Place block at previous empty position.
-            // Use an optional runtime player AABB getter (passed via opts.getPlayerAABB)
-            // so crouch/height changes in `main.js` are respected. Fallback to
-            // conservative estimate using `PLAYER`/`CAMERA` constants.
+
             const px = Math.floor(prev.x);
             const py = Math.floor(prev.y);
             const pz = Math.floor(prev.z);
             const camPos = origin;
+
+            // Only allow placement if the hit is on a single axis (not edge/corner)
+            const dx = Math.abs(Math.floor(p.x) - px);
+            const dy = Math.abs(Math.floor(p.y) - py);
+            const dz = Math.abs(Math.floor(p.z) - pz);
+            const axisHits = (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0);
+            if (axisHits !== 1) {
+              return;
+            }
 
             let playerAABB;
             if (typeof opts.getPlayerAABB === 'function') {

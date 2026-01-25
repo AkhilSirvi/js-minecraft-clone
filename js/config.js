@@ -79,6 +79,7 @@ export const PLAYER = {
   crouchHeight: 1.4,     // player height when crouching
   spawnX: 0,             // spawn X coordinate
   spawnZ: 0,             // spawn Z coordinate
+  blockreach: 4.5,      // how far the player can reach to interact with blocks
 };
 
 // ============================================

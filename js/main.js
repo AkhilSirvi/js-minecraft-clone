@@ -5,6 +5,145 @@ import { initInteraction } from './interaction.js';
 import createDebugOverlay from './debugOverlay.js';
 import { SEED, PLAYER, PHYSICS, RENDER, DAY_NIGHT, CAMERA, DEBUG } from './config.js';
 
+// Game settings (modifiable via settings menu)
+const gameSettings = {
+  viewDistance: RENDER.viewDistance,
+  fov: RENDER.fov,
+  showFPS: RENDER.showFPS,
+  mouseSensitivity: CAMERA.mouseSensitivity,
+  volume: 1.0
+};
+
+// Load saved settings from localStorage
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem('minecraftjs_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      Object.assign(gameSettings, parsed);
+    }
+  } catch (e) {
+    console.warn('Could not load settings:', e);
+  }
+}
+
+// Save settings to localStorage
+function saveSettings() {
+  try {
+    localStorage.setItem('minecraftjs_settings', JSON.stringify(gameSettings));
+  } catch (e) {
+    console.warn('Could not save settings:', e);
+  }
+}
+
+// Menu handling
+let gameStarted = false;
+
+function initMenu() {
+  const mainMenu = document.getElementById('main-menu');
+  const playButton = document.getElementById('play-button');
+  const settingsButton = document.getElementById('settings-button');
+  const settingsMenu = document.getElementById('settings-menu');
+  const settingsBack = document.getElementById('settings-back');
+  const settingsSave = document.getElementById('settings-save');
+  const loadingText = document.getElementById('loading-text');
+  const crosshair = document.getElementById('crosshair');
+
+  // Settings inputs
+  const viewDistanceInput = document.getElementById('setting-view-distance');
+  const viewDistanceValue = document.getElementById('view-distance-value');
+  const fovInput = document.getElementById('setting-fov');
+  const fovValue = document.getElementById('fov-value');
+  const showFpsInput = document.getElementById('setting-show-fps');
+  const sensitivityInput = document.getElementById('setting-sensitivity');
+  const sensitivityValue = document.getElementById('sensitivity-value');
+  const volumeInput = document.getElementById('setting-volume');
+  const volumeValue = document.getElementById('volume-value');
+
+  // Load saved settings
+  loadSettings();
+
+  // Apply loaded settings to UI
+  function updateSettingsUI() {
+    viewDistanceInput.value = gameSettings.viewDistance;
+    viewDistanceValue.textContent = gameSettings.viewDistance;
+    fovInput.value = gameSettings.fov;
+    fovValue.textContent = gameSettings.fov + '°';
+    showFpsInput.checked = gameSettings.showFPS;
+    // Convert sensitivity back to slider value (0.001-0.004 -> 1-20)
+    const sensSlider = Math.round((gameSettings.mouseSensitivity - 0.0005) / 0.00025);
+    sensitivityInput.value = Math.max(1, Math.min(20, sensSlider));
+    sensitivityValue.textContent = sensitivityInput.value;
+    volumeInput.value = Math.round(gameSettings.volume * 100);
+    volumeValue.textContent = volumeInput.value + '%';
+  }
+
+  updateSettingsUI();
+
+  // Hide crosshair until game starts
+  if (crosshair) crosshair.style.display = 'none';
+
+  // Settings input handlers
+  viewDistanceInput.addEventListener('input', () => {
+    viewDistanceValue.textContent = viewDistanceInput.value;
+  });
+
+  fovInput.addEventListener('input', () => {
+    fovValue.textContent = fovInput.value + '°';
+  });
+
+  sensitivityInput.addEventListener('input', () => {
+    sensitivityValue.textContent = sensitivityInput.value;
+  });
+
+  volumeInput.addEventListener('input', () => {
+    volumeValue.textContent = volumeInput.value + '%';
+  });
+
+  // Open settings
+  settingsButton.addEventListener('click', () => {
+    updateSettingsUI();
+    settingsMenu.classList.remove('hidden');
+  });
+
+  // Close settings without saving
+  settingsBack.addEventListener('click', () => {
+    settingsMenu.classList.add('hidden');
+    updateSettingsUI(); // Reset to saved values
+  });
+
+  // Save settings
+  settingsSave.addEventListener('click', () => {
+    gameSettings.viewDistance = parseInt(viewDistanceInput.value);
+    gameSettings.fov = parseInt(fovInput.value);
+    gameSettings.showFPS = showFpsInput.checked;
+    // Convert slider (1-20) to sensitivity (0.00075-0.005)
+    gameSettings.mouseSensitivity = 0.0005 + (parseInt(sensitivityInput.value) * 0.00025);
+    gameSettings.volume = parseInt(volumeInput.value) / 100;
+    
+    saveSettings();
+    settingsMenu.classList.add('hidden');
+  });
+
+  // Play button
+  playButton.addEventListener('click', () => {
+    if (gameStarted) return;
+    gameStarted = true;
+    
+    // Show loading indicator
+    playButton.disabled = true;
+    playButton.textContent = 'Loading...';
+    loadingText.classList.add('visible');
+
+    // Small delay to show loading state, then start game
+    setTimeout(() => {
+      mainMenu.classList.add('hidden');
+      if (crosshair) crosshair.style.display = '';
+      main();
+    }, 100);
+  });
+}
+
 function main() {
   if (DEBUG.showStartupInfo) console.log('Initializing renderer and scene');
   const scene = new THREE.Scene();
@@ -49,7 +188,7 @@ function main() {
   let lastFpsUpdate = performance.now();
   let currentFPS = 0;
   let fpsDisplay = null;
-  if (RENDER.showFPS) {
+  if (gameSettings.showFPS) {
     fpsDisplay = document.createElement('div');
     fpsDisplay.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.7);color:#0f0;padding:5px 10px;font-family:monospace;font-size:14px;z-index:1000;pointer-events:none;';
     document.body.appendChild(fpsDisplay);
@@ -58,8 +197,8 @@ function main() {
   // Procedural chunk streaming manager
   // Use block-coordinate units: 1 block == 1 world unit
   const blockSize = 1; // blocks per unit
-  if (DEBUG.showStartupInfo) console.log('Creating ChunkManager (seed, blockSize, viewDistance)=', SEED, blockSize, RENDER.viewDistance);
-  const cm = new ChunkManager(scene, { seed: SEED, blockSize, viewDistance: RENDER.viewDistance });
+  if (DEBUG.showStartupInfo) console.log('Creating ChunkManager (seed, blockSize, viewDistance)=', SEED, blockSize, gameSettings.viewDistance);
+  const cm = new ChunkManager(scene, { seed: SEED, blockSize, viewDistance: gameSettings.viewDistance });
   // initial load around origin
   if (DEBUG.showStartupInfo) console.log('Initial chunk load around origin starting');
   if (DEBUG.showStartupInfo) console.log('Initial chunk load completed');
@@ -78,6 +217,19 @@ function main() {
   const tempLocalPoint = new THREE.Vector3();
   const tempWorldPoint = new THREE.Vector3();
   const tempVec2 = new THREE.Vector2();
+
+    // Highlight box for block the player is looking at
+    const highlightMaterial = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      depthTest: true,
+      transparent: true,
+      opacity: 0.5
+    });
+    const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.00, 1.00, 1.00));
+    const highlightBox = new THREE.LineSegments(highlightGeometry, highlightMaterial);
+    highlightBox.renderOrder = 9999;
+    highlightBox.visible = false;
+    scene.add(highlightBox);
   
   // helper: test whether player's rectangular box at given world x,z and center y would intersect any solid block
   function isPlayerPositionFree(testX, testY, testZ, height = null) {
@@ -183,7 +335,11 @@ function main() {
   const spawnX = spawnWorldX;
   const spawnZ = spawnWorldZ;
 
-  const camera = new THREE.PerspectiveCamera(RENDER.fov, window.innerWidth / window.innerHeight, RENDER.nearClip, RENDER.farClip);
+  const camera = new THREE.PerspectiveCamera(gameSettings.fov, window.innerWidth / window.innerHeight, RENDER.nearClip, RENDER.farClip);
+  let defaultFov = gameSettings.fov;
+  let sprintFov = defaultFov + 15; // Increase FOV by 15 when sprinting
+  let targetFov = defaultFov;
+  let fovLerpSpeed = 0.15; // How quickly FOV changes
 
   // player collision size (from config)
   const playerWidth = blockSize * PLAYER.width;
@@ -320,7 +476,7 @@ function main() {
   };
   window.tp = window.teleport;
 
-  const renderer = new THREE.WebGLRenderer({ antialias: false , alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: true , alpha: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -342,7 +498,7 @@ function main() {
   // Initialize interaction (mining/placing)
   const interaction = initInteraction(cm, camera, renderer.domElement, {
     placeBlockId: 2,
-    reach: 6,
+    reach: PLAYER.blockreach,
     // Provide current player AABB so interaction can respect crouch/height changes
     getPlayerAABB: () => ({
       minX: player.position.x - playerHalfWidth,
@@ -369,8 +525,8 @@ function main() {
     if (document.pointerLockElement !== renderer.domElement) return;
     const movementX = e.movementX || 0;
     const movementY = e.movementY || 0;
-    player.rotation.y -= movementX * CAMERA.mouseSensitivity;
-    pitchObject.rotation.x -= movementY * CAMERA.mouseSensitivity;
+    player.rotation.y -= movementX * gameSettings.mouseSensitivity;
+    pitchObject.rotation.x -= movementY * gameSettings.mouseSensitivity;
     pitchObject.rotation.x = Math.max(-PI_2 + 0.01, Math.min(PI_2 - 0.01, pitchObject.rotation.x));
   }
 
@@ -393,12 +549,8 @@ function main() {
         move.crouch = true; 
         break;
       case 'Space':
-        // jump if on ground or very close to ground (coyote time for edge cases)
         e.preventDefault();
-        if (!isCrouching) {
-          // Allow jump if onGround OR if we just left ground (within a small time/distance)
-          // This helps with edge cases where player is at the very edge of a block
-          if (onGround || (velY <= 0 && velY > -2)) {
+        if (onGround || (velY <= 0 && velY > -2)) {
             // Double-check we have ground beneath using rectangular samples
             const bottomY = player.position.y - currentPlayerHeight / 2;
             const hx = playerHalfWidth * 0.98;
@@ -423,8 +575,8 @@ function main() {
               velY = jumpSpeed;
               onGround = false;
             }
-          }
         }
+        
         break;
     }
   }
@@ -552,8 +704,22 @@ function main() {
     let currentMaxSpeed = maxSpeed;
     if (isCrouching) {
       currentMaxSpeed = maxSpeed * crouchMultiplier;
-    } else if (move.sprint && (move.forward || move.backward || move.left || move.right)) {
+    } else if (move.sprint && (move.forward)) {
       currentMaxSpeed = maxSpeed * sprintMultiplier;
+    }
+    // FOV sprint logic
+    if (move.sprint && move.forward && !isCrouching) {
+      targetFov = sprintFov;
+    } else {
+      targetFov = defaultFov;
+    }
+    // Smoothly interpolate camera.fov
+    camera.fov += (targetFov - camera.fov) * fovLerpSpeed;
+    if (Math.abs(camera.fov - targetFov) > 0.1) {
+      camera.updateProjectionMatrix();
+    } else {
+      camera.fov = targetFov;
+      camera.updateProjectionMatrix();
     }
     
     // Target velocity based on input
@@ -626,7 +792,7 @@ function main() {
       const currentMaxGround = getMaxGroundAtPosition(player.position.x, player.position.z, currentBottomY);
       const targetMaxGround = getMaxGroundAtPosition(newX, player.position.z, currentBottomY);
       const CROUCH_MAX_DROP = 0.5; // blocks - max allowed drop when crouching
-      if (isCrouching && isFinite(currentMaxGround) && isFinite(targetMaxGround) && (currentMaxGround - targetMaxGround) > CROUCH_MAX_DROP) {
+      if (onGround && isCrouching && isFinite(currentMaxGround) && isFinite(targetMaxGround) && (currentMaxGround - targetMaxGround) > CROUCH_MAX_DROP) {
         // Block horizontal movement to avoid falling off edge while crouched
         velocity.x = 0;
       } else if (isPlayerPositionFree(newX, player.position.y, player.position.z)) {
@@ -644,7 +810,7 @@ function main() {
       const currentMaxGroundZ = getMaxGroundAtPosition(player.position.x, player.position.z, currentBottomYz);
       const targetMaxGroundZ = getMaxGroundAtPosition(player.position.x, newZ, currentBottomYz);
       const CROUCH_MAX_DROP_Z = 0.5;
-      if (isCrouching && isFinite(currentMaxGroundZ) && isFinite(targetMaxGroundZ) && (currentMaxGroundZ - targetMaxGroundZ) > CROUCH_MAX_DROP_Z) {
+      if (onGround && isCrouching && isFinite(currentMaxGroundZ) && isFinite(targetMaxGroundZ) && (currentMaxGroundZ - targetMaxGroundZ) > CROUCH_MAX_DROP_Z) {
         velocity.z = 0;
       } else if (isPlayerPositionFree(player.position.x, player.position.y, newZ)) {
         player.position.z = newZ;
@@ -751,9 +917,16 @@ function main() {
     accumulator += frameDelta;
     
     // Run physics at fixed timestep for consistency
+    let didUpdate = false;
     while (accumulator >= FIXED_DT) {
       updatePhysics(FIXED_DT);
       accumulator -= FIXED_DT;
+      didUpdate = true;
+    }
+    // If at high FPS and accumulator is too small, force at least one update per frame
+    if (!didUpdate && accumulator > 0) {
+      updatePhysics(accumulator);
+      accumulator = 0;
     }
 
     // Update chunk manager around current player position (queue loads)
@@ -825,31 +998,43 @@ function main() {
     skyColor.copy(skyNight).lerp(skyDay, ambientRatio);
     scene.background = skyColor;
 
+    // Always update highlight box and target block every frame
+    raycaster.setFromCamera(tempVec2.set(0, 0), camera);
+    raycaster.far = PLAYER.blockreach;
+    let targetInfo = null;
+    camera.getWorldPosition(tempLocalPoint);
+    camera.getWorldDirection(tempWorldPoint);
+    const maxDist = raycaster.far || 50;
+    const step = 0.1;
+    for (let d = 0; d <= maxDist; d += step) {
+      const sx = tempLocalPoint.x + tempWorldPoint.x * d;
+      const sy = tempLocalPoint.y + tempWorldPoint.y * d;
+      const sz = tempLocalPoint.z + tempWorldPoint.z * d;
+      const id2 = cm.getBlockAtWorld(sx, sy, sz);
+      if (id2 !== 0) {
+        const bx2 = Math.floor(sx / blockSize);
+        const by2 = Math.floor((sy - MIN_Y * blockSize) / blockSize) + MIN_Y;
+        const bz2 = Math.floor(sz / blockSize);
+        targetInfo = { blockX: bx2, blockY: by2, blockZ: bz2, id: id2, dist: d };
+        break;
+      }
+    }
+
+    // Highlight the block the player is looking at
+    if (targetInfo) {
+      highlightBox.visible = true;
+      highlightBox.position.set(
+        targetInfo.blockX + 0.5,
+        targetInfo.blockY + 0.5,
+        targetInfo.blockZ + 0.5
+      );
+    } else {
+      highlightBox.visible = false;
+    }
+
     // update debug overlay (throttled to reduce raycast overhead)
     if (showDebug && time - lastDebugUpdate > debugUpdateInterval) {
       lastDebugUpdate = time;
-      raycaster.setFromCamera(tempVec2.set(0, 0), camera);
-      raycaster.far = 50; 
-      let targetInfo = null;
-      if (!targetInfo) {
-        camera.getWorldPosition(tempLocalPoint);
-        camera.getWorldDirection(tempWorldPoint);
-        const maxDist = raycaster.far || 50;
-        const step = 0.1; // smaller steps detect very-close blocks reliably
-        for (let d = 0; d <= maxDist; d += step) {
-          const sx = tempLocalPoint.x + tempWorldPoint.x * d;
-          const sy = tempLocalPoint.y + tempWorldPoint.y * d;
-          const sz = tempLocalPoint.z + tempWorldPoint.z * d;
-          const id2 = cm.getBlockAtWorld(sx, sy, sz);
-          if (id2 !== 0) {
-            const bx2 = Math.floor(sx / blockSize);
-            const by2 = Math.floor((sy - MIN_Y * blockSize) / blockSize) + MIN_Y;
-            const bz2 = Math.floor(sz / blockSize);
-            targetInfo = { blockX: bx2, blockY: by2, blockZ: bz2, id: id2, dist: d };
-            break;
-          }
-        }
-      }
       // Compute look vector, yaw/pitch and facing name
       const lookVec = new THREE.Vector3();
       camera.getWorldDirection(lookVec);
@@ -913,4 +1098,6 @@ function main() {
 
 // mark startTime for first-frame log
 const startTimeMarker = performance.now();
-main();
+
+// Initialize menu instead of starting game directly
+initMenu();
