@@ -931,8 +931,7 @@ function main() {
 
     // Update chunk manager around current player position (queue loads)
     cm.update(player.position.x, player.position.z);
-    // process a small number of queued chunk loads per frame to avoid stalls
-    if (typeof cm.processLoadQueue === 'function') cm.processLoadQueue();
+    // Chunk loading is now handled by a timer, not per-frame
 
     // Day / night update
     const now = performance.now() / 1000;
@@ -1094,6 +1093,13 @@ function main() {
     prevTime = time;
   }
   animate();
+
+  // Decouple chunk loading from frame rate: process chunk load queue at fixed interval
+  if (typeof cm.processLoadQueue === 'function') {
+    setInterval(() => {
+      cm.processLoadQueue();
+    }, 33); // ~30 times per second
+  }
 }
 
 // mark startTime for first-frame log
