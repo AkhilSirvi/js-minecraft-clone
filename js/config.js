@@ -48,7 +48,7 @@ export const BIOMES = {
 
 // Ore generation - [minY, maxY, veinSize, rarity]
 export const ORES = {
-  coal: { minY: -64, maxY: 128, veinSize: 6, rarity: 0.08 },
+  coal: { minY: -64, maxY: 128, veinSize: 6, rarity: 0.06 },
   iron: { minY: -64, maxY: 64, veinSize: 5, rarity: 0.06 },
   gold: { minY: -64, maxY: 32, veinSize: 4, rarity: 0.015 },
   diamond: { minY: -64, maxY: 16, veinSize: 4, rarity: 0.005 },
@@ -76,7 +76,7 @@ export const RENDER = {
 export const PLAYER = {
   width: 0.6,            // player width in blocks
   height: 1.8,           // player height in blocks
-  crouchHeight: 1.4,     // player height when crouching
+  crouchHeight: 1.5,     // player height when crouching
   spawnX: 0,             // spawn X coordinate
   spawnZ: 0,             // spawn Z coordinate
   blockreach: 4.5,      // how far the player can reach to interact with blocks
@@ -114,7 +114,7 @@ export const PHYSICS = {
 
 export const CAMERA = {
   mouseSensitivity: 0.002,  // mouse look sensitivity
-  thirdPersonDistance: 5,   // distance behind player in 3rd person
+  thirdPersonDistance: 3,   // distance behind player in 3rd person
   thirdPersonHeight: 0.35,  // height offset (multiplied by player height)
   eyeHeight: 0.5,           // eye position (multiplied by player height)
 };
@@ -139,6 +139,18 @@ export const DAY_NIGHT = {
   sunSize: 100,
   moonSize: 80,
   orbitDistance: 600,
+};
+
+// ============================================
+// VEGETATION COLORS
+// ============================================
+
+export const COLORS = {
+  grassTop: 0x68bf48,       // grass block top color
+  grassSide: 0x68bf48,      // grass block side color
+  leaves: 0x4aad3a,         // tree leaves color
+  tallGrass: 0x68bf48,      // tall grass color
+  cactus: 0x3dc922,         // cactus color
 };
 
 // ============================================

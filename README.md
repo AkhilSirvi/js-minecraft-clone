@@ -7,18 +7,6 @@ physics, and real-time rendering using Three.js.
 
 Live Demo: https://akhilsirvi.github.io/js-minecraft-clone/
 
-Table of contents
-- Overview
-- How it works (components)
-- Chunk generation details
-- Rendering & day/night
-- Player, controls & physics
-- Configuration
-- Running locally
-- Adding blocks & textures
-- Project structure
-- Contributing & license
-
 **Overview**
 
 This project is an educational, browser-based voxel engine. It keeps memory and
@@ -109,20 +97,3 @@ the pointer and begin playing.
 		 [js/chunkGen.js](js/chunkGen.js).
 	3. Update the material/UV mapping rules in [js/chunkManager.js](js/chunkManager.js)
 		 so the new ID uses the correct texture.
-
-**Project structure**
-- index.html — entry page
-- style.css — basic page styling
-- assets/textures/block/ — block textures
-- js/
-	- main.js — application entry, renderer, controls, loop ([js/main.js](js/main.js))
-	- chunkGen.js — procedural chunk generator ([js/chunkGen.js](js/chunkGen.js))
-	- chunkManager.js — streaming and mesh generation ([js/chunkManager.js](js/chunkManager.js))
-	- perlin.js — Perlin noise implementation ([js/perlin.js](js/perlin.js))
-	- config.js — runtime configuration ([js/config.js](js/config.js))
-	- debugOverlay.js — on-screen debug info ([js/debugOverlay.js](js/debugOverlay.js))
-	- three.module.js, three.core.js — bundled Three.js modules
-
-**Contributing & License**
-- See `LICENSE` for license terms. Contributions are welcome — open an issue or
-	submit a pull request with a clear description.

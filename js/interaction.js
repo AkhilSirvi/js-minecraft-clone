@@ -3,14 +3,20 @@ import { PLAYER, CAMERA } from './config.js';
 
 // Initialize mouse interactions for mining (left click) and placing (right click)
 export function initInteraction(cm, camera, domElement, opts = {}) {
-  const reach = opts.reach ?? 6.0;
+  const reach = PLAYER.blockreach;
   let placeBlockId = opts.placeBlockId ?? 2; // default to dirt
   const mouseButtons = { left: false, right: false };
   let placeInterval = null;
   const onContextMenu = (e) => e.preventDefault();
   const onMouseDown = (evt) => {
     if (evt.button === 0) {
-      performAction(evt);
+      mouseButtons.left = true;
+      if (opts.blockBreaker) opts.blockBreaker._mouseDown = true;
+      if (opts.blockBreaker && typeof opts.blockBreaker.startBreaking === 'function') {
+        opts.blockBreaker.startBreaking();
+      } else {
+        performAction(evt);
+      }
     } else if (evt.button === 2) {
       performAction(evt);
       mouseButtons.right = true;
@@ -18,7 +24,13 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
     }
   };
   const onMouseUp = (evt) => {
-    if (evt.button === 2) {
+    if (evt.button === 0) {
+      mouseButtons.left = false;
+      if (opts.blockBreaker) opts.blockBreaker._mouseDown = false;
+      if (opts.blockBreaker && typeof opts.blockBreaker.stopBreaking === 'function') {
+        opts.blockBreaker.stopBreaking();
+      }
+    } else if (evt.button === 2) {
       mouseButtons.right = false;
       stopPlacing();
     }
@@ -47,7 +59,9 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
         const hz = Math.floor(p.z);
 
         if (button === 0 && bid !== 14) {
-          // Break block
+          if (opts.blockBreaker) {
+            return;
+          }
           cm.setBlockAtWorld(hx + 0.5, hy + 0.5, hz + 0.5, 0);
         } else if (button === 2) {
 

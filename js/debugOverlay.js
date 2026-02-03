@@ -2,8 +2,6 @@
 export default function createDebugOverlay() {
   const el = document.createElement('div');
   el.style.position = 'fixed';
-  el.style.left = '8px';
-  el.style.top = '8px';
   el.style.padding = '6px 10px';
   el.style.background = 'rgba(0,0,0,0.6)';
   el.style.color = '#fff';
@@ -54,7 +52,7 @@ export default function createDebugOverlay() {
       const lines = [];
       // FPS / timing
       if (info && typeof info.delta === 'number') {
-        lines.push(`FPS: ${Math.round(fpsSmoothed)} (delta ${(info.delta*1000).toFixed(1)} ms)`);
+        lines.push(`FPS: ${Math.round(fpsSmoothed)} (delta ${(info.delta*1000).toFixed(1)} ms) VSync: ON`);
       } else {
         lines.push(`FPS: ${Math.round(fpsSmoothed)}`);
       }

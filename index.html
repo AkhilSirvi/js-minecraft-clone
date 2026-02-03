@@ -38,7 +38,7 @@
       #crosshair:before {
         left: 50%;
         top: 0;
-        width: 2px;
+        width: 1.5px;
         height: 100%;
         transform: translateX(-50%);
       }
@@ -46,7 +46,7 @@
         top: 50%;
         left: 0;
         width: 100%;
-        height: 2px;
+        height: 1.5px;
         transform: translateY(-50%);
       }
 
@@ -329,6 +329,16 @@
       .settings-button.primary:hover {
         background: linear-gradient(180deg, #8bc34a 0%, #689f38 100%);
       }
+
+      #credits {
+        position: fixed;
+        bottom: 5px;
+        right: 10px;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.6);
+        z-index: 10002;
+        font-family: Arial, sans-serif;
+      }
     </style>
   </head>
   <body>
@@ -412,7 +422,7 @@
         </div>
       </div>
     </div>
-
+    <div id="credits">Textures from Minecraft © Mojang Studios / Microsoft — used for educational purposes.</div>
     <div id="crosshair"></div>
     <script type="module" src="js/main.js"></script>
   </body>

@@ -75,7 +75,7 @@ function getBiome(temperature, humidity, continentalness, erosion, height, seaLe
   }
 
   // Mountain biome - high continentalness with low erosion creates peaks
-  if (continentalness > 0.85 && erosion < 0.4) {
+  if (continentalness > 0.55 && erosion < 0.4) {
     if (temperature < 0.35) return BIOME.SNOWY;
     return BIOME.MOUNTAINS;
   }
@@ -211,7 +211,7 @@ function getBiomeVegetationDensity(biome) {
 // Get tree density for biome
 function getBiomeTreeDensity(biome) {
   switch (biome) {
-    case BIOME.FOREST: return 0.09;
+    case BIOME.FOREST: return 0.9;
     case BIOME.PLAINS: return 0.003;
     case BIOME.SWAMP: return 0.03;
     case BIOME.SAVANNA: return 0.006;
@@ -564,15 +564,10 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       // Determine biome with erosion parameter (for block placement later)
       const biome = getBiome(temperature, humidity, continentalness, erosion, prelimHeight, seaLevel);
       biomeMapCache[idx] = biome;
-      
-      // Get BLENDED terrain parameters for smooth transitions
       const blendedParams = getBlendedTerrainParams(worldX, worldZ, idx);
       const blendedScale = blendedParams.terrainScale * lerp(1.0, 0.4, blendedParams.erosion);
       const blendedOffset = blendedParams.heightOffset;
-      
       const combinedNoise = baseNoise + detailNoise;
-      
-      // Calculate height using blended parameters
       let finalHeight;
       
       // Special handling for extreme biomes, but blend the contribution
@@ -582,8 +577,6 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       
       // Base height calculation with blended scale
       let baseHeight_calc = continentHeight + combinedNoise * amplitude * blendedScale + blendedOffset * 0.5;
-      
-      // Mountain contribution (blended in based on how "mountainous" the blend is)
       if (mountainInfluence > 0) {
         const mountainNoise = Math.abs(perlin.octaveNoise(worldX * 0.015, 0, worldZ * 0.015, 4, 0.5, 2.0));
         const peakNoise = perlin2.octaveNoise(worldX * 0.03, 50, worldZ * 0.03, 2, 0.5, 2.0);
@@ -727,30 +720,30 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
   // We check a wider area to include trees from neighboring chunks that extend into this one
   // ==========================================
   
-  // Helper to get height at any world position (for cross-chunk tree generation)
-  function getHeightAt(wx, wz) {
-    // Check if within current chunk
-    const lx = wx - chunkWorldX;
-    const lz = wz - chunkWorldZ;
-    if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
-      return heightMapCache[lx * CHUNK_SIZE + lz];
-    }
-    // For positions outside chunk, calculate height using same noise
-    const noiseX = wx * scale;
-    const noiseZ = wz * scale;
-    const baseNoise = perlin.octaveNoise(noiseX, 0, noiseZ, octaves, persistence, lacunarity);
-    const detailNoise = perlin2.octaveNoise(wx * scale * 2.5, 0, wz * scale * 2.5, 3, 0.5, 2.0) * 0.25;
-    
-    // Simplified height calculation for neighboring chunks
+  // Helper to compute biome data at any world position (used for blending)
+  function computeClimateAt(wx, wz) {
     const warpX = perlin2.octaveNoise(wx * 0.001, 0, wz * 0.001, 2, 0.5, 2.0) * 50;
     const warpZ = perlin2.octaveNoise(wx * 0.001, 100, wz * 0.001, 2, 0.5, 2.0) * 50;
-    const tempNoise = perlin.octaveNoise((wx + warpX) * 0.0015, 0, (wz + warpZ) * 0.0015, 4, 0.5, 2.0);
+    const tempNoise = perlin.octaveNoise(
+      (wx + warpX) * temperatureScale, 0, (wz + warpZ) * temperatureScale, 4, 0.5, 2.0
+    );
     const temperature = clamp((tempNoise + 1) * 0.5, 0, 1);
     
-    const contBase = perlin.octaveNoise(wx * 0.0008, 200, wz * 0.0008, 5, 0.55, 2.0);
+    const humidWarpX = perlin.octaveNoise(wx * 0.0015, 50, wz * 0.0015, 2, 0.5, 2.0) * 40;
+    const humidWarpZ = perlin.octaveNoise(wx * 0.0015, 150, wz * 0.0015, 2, 0.5, 2.0) * 40;
+    const humidNoise = perlin2.octaveNoise(
+      (wx + humidWarpX) * humidityScale, 0, (wz + humidWarpZ) * humidityScale, 4, 0.5, 2.0
+    );
+    const humidity = clamp((humidNoise + 1) * 0.5, 0, 1);
+    
+    const contBase = perlin.octaveNoise(wx * continentScale, 200, wz * continentScale, 5, 0.55, 2.0);
     const ridgeNoise = 1 - Math.abs(perlin2.octaveNoise(wx * 0.003, 300, wz * 0.003, 3, 0.5, 2.0));
     const continentalness = clamp(contBase + 0.4 + ridgeNoise * ridgeNoise * 0.3, 0, 1.5);
     
+    const erosionNoise = perlin3.octaveNoise(wx * erosionScale, 0, wz * erosionScale, 3, 0.5, 2.0);
+    const erosion = clamp((erosionNoise + 1) * 0.5, 0, 1);
+    
+    // Calculate continent height
     let continentHeight;
     if (continentalness < 0.25) {
       continentHeight = seaLevel - 20 - (0.25 - continentalness) * 40;
@@ -765,7 +758,154 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       continentHeight = baseHeight + 20 + t * 50;
     }
     
-    return Math.floor(clamp(continentHeight + (baseNoise + detailNoise) * amplitude * 0.4, MIN_Y, MAX_Y));
+    const baseN = perlin.octaveNoise(wx * scale, 0, wz * scale, octaves, persistence, lacunarity);
+    const prelimH = Math.floor(clamp(continentHeight + baseN * amplitude * 0.3, MIN_Y, MAX_Y));
+    const biome = getBiome(temperature, humidity, continentalness, erosion, prelimH, seaLevel);
+    
+    return {
+      temperature, humidity, continentalness, erosion, continentHeight, biome,
+      terrainScale: getBiomeTerrainScaleBase(biome),
+      heightOffset: getBiomeHeightOffset(biome)
+    };
+  }
+
+  function getBlendedParamsAt(wx, wz) {
+    let totalWeight = 0;
+    let blendedScale = 0;
+    let blendedOffset = 0;
+    let blendedErosion = 0;
+    
+    const sampleStep = 4;
+    const blendRadius = BIOME_BLEND_RADIUS;
+    
+    for (let dx = -blendRadius; dx <= blendRadius; dx += sampleStep) {
+      for (let dz = -blendRadius; dz <= blendRadius; dz += sampleStep) {
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > blendRadius) continue;
+        
+        const normalizedDist = dist / blendRadius;
+        const weight = 1 - normalizedDist * normalizedDist;
+        const smoothWeight = weight * weight;
+        
+        if (smoothWeight <= 0.001) continue;
+        
+        const sampleX = wx + dx;
+        const sampleZ = wz + dz;
+        
+        // Check if sample is in current chunk's cache
+        const slx = sampleX - chunkWorldX;
+        const slz = sampleZ - chunkWorldZ;
+        
+        let sampleData;
+        if (slx >= 0 && slx < CHUNK_SIZE && slz >= 0 && slz < CHUNK_SIZE) {
+          const sampleIdx = slx * CHUNK_SIZE + slz;
+          const temp = temperatureCache[sampleIdx];
+          const humid = humidityCache[sampleIdx];
+          const cont = continentalnessCache[sampleIdx];
+          const eros = erosionCache[sampleIdx];
+          
+          let contHeight;
+          if (cont < 0.25) {
+            contHeight = seaLevel - 20 - (0.25 - cont) * 40;
+          } else if (cont < 0.4) {
+            const t = (cont - 0.25) / 0.15;
+            contHeight = lerp(seaLevel - 20, seaLevel + 5, smoothstep(t));
+          } else if (cont < 0.8) {
+            const t = (cont - 0.4) / 0.4;
+            contHeight = lerp(seaLevel + 5, baseHeight + 20, t);
+          } else {
+            const t = (cont - 0.8) / 0.5;
+            contHeight = baseHeight + 20 + t * 50;
+          }
+          
+          const baseN = perlin.octaveNoise(sampleX * scale, 0, sampleZ * scale, octaves, persistence, lacunarity);
+          const prelimH = Math.floor(clamp(contHeight + baseN * amplitude * 0.3, MIN_Y, MAX_Y));
+          const biome = getBiome(temp, humid, cont, eros, prelimH, seaLevel);
+          
+          sampleData = {
+            terrainScale: getBiomeTerrainScaleBase(biome),
+            heightOffset: getBiomeHeightOffset(biome),
+            erosion: eros
+          };
+        } else {
+          const climate = computeClimateAt(sampleX, sampleZ);
+          sampleData = {
+            terrainScale: climate.terrainScale,
+            heightOffset: climate.heightOffset,
+            erosion: climate.erosion
+          };
+        }
+        
+        blendedScale += sampleData.terrainScale * smoothWeight;
+        blendedOffset += sampleData.heightOffset * smoothWeight;
+        blendedErosion += sampleData.erosion * smoothWeight;
+        totalWeight += smoothWeight;
+      }
+    }
+    
+    if (totalWeight > 0) {
+      return {
+        terrainScale: blendedScale / totalWeight,
+        heightOffset: blendedOffset / totalWeight,
+        erosion: blendedErosion / totalWeight
+      };
+    }
+    
+    return { terrainScale: 0.4, heightOffset: 5, erosion: 0.5 };
+  }
+  
+  function getHeightAt(wx, wz) {
+    const lx = wx - chunkWorldX;
+    const lz = wz - chunkWorldZ;
+    if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      return heightMapCache[lx * CHUNK_SIZE + lz];
+    }
+
+    const climate = computeClimateAt(wx, wz);
+    const { continentalness, erosion, continentHeight, biome } = climate;
+    
+    // Base terrain noise
+    const noiseX = wx * scale;
+    const noiseZ = wz * scale;
+    const baseNoise = perlin.octaveNoise(noiseX, 0, noiseZ, octaves, persistence, lacunarity);
+    const detailNoise = perlin2.octaveNoise(wx * scale * 2.5, 0, wz * scale * 2.5, 3, 0.5, 2.0) * 0.25;
+    const combinedNoise = baseNoise + detailNoise;
+    
+    // Get BLENDED terrain parameters (same as PHASE 2)
+    const blendedParams = getBlendedParamsAt(wx, wz);
+    const blendedScale = blendedParams.terrainScale * lerp(1.0, 0.4, blendedParams.erosion);
+    const blendedOffset = blendedParams.heightOffset;
+    
+    // Calculate height with biome-specific scaling using blended params
+    const mountainInfluence = blendedParams.terrainScale > 1.2 ? (blendedParams.terrainScale - 1.2) / 0.6 : 0;
+    const oceanInfluence = blendedParams.terrainScale < 0.2 ? (0.2 - blendedParams.terrainScale) / 0.15 : 0;
+    const swampInfluence = blendedParams.heightOffset < 0 ? Math.min(1, -blendedParams.heightOffset / 3) : 0;
+    
+    // Base height calculation with blended scale
+    let finalHeight = continentHeight + combinedNoise * amplitude * blendedScale + blendedOffset * 0.5;
+    
+    // Mountain contribution (blended)
+    if (mountainInfluence > 0) {
+      const mountainNoise = Math.abs(perlin.octaveNoise(wx * 0.015, 0, wz * 0.015, 4, 0.5, 2.0));
+      const peakNoise = perlin2.octaveNoise(wx * 0.03, 50, wz * 0.03, 2, 0.5, 2.0);
+      const mountainBonus = mountainNoise * 55 + Math.max(0, peakNoise) * 25;
+      finalHeight += mountainBonus * smoothstep(mountainInfluence);
+    }
+    
+    // Ocean floor contribution (blended)
+    if (oceanInfluence > 0) {
+      const oceanFloorNoise = perlin.octaveNoise(wx * 0.02, 0, wz * 0.02, 2, 0.5, 2.0);
+      const oceanHeight = seaLevel - 18 + oceanFloorNoise * 12 + combinedNoise * 8;
+      finalHeight = lerp(finalHeight, oceanHeight, smoothstep(oceanInfluence));
+    }
+    
+    // Swamp flattening (blended)
+    if (swampInfluence > 0) {
+      const swampHeight = seaLevel + 1 + combinedNoise * 4 + detailNoise * 2;
+      finalHeight = lerp(finalHeight, swampHeight, smoothstep(swampInfluence) * 0.7);
+    }
+    
+    return Math.floor(clamp(finalHeight, MIN_Y, MAX_Y));
   }
   
   // Helper to get biome at any world position
@@ -775,26 +915,9 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
     if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
       return biomeMapCache[lx * CHUNK_SIZE + lz];
     }
-    // Calculate biome for positions outside chunk
-    const warpX = perlin2.octaveNoise(wx * 0.001, 0, wz * 0.001, 2, 0.5, 2.0) * 50;
-    const warpZ = perlin2.octaveNoise(wx * 0.001, 100, wz * 0.001, 2, 0.5, 2.0) * 50;
-    const tempNoise = perlin.octaveNoise((wx + warpX) * 0.0015, 0, (wz + warpZ) * 0.0015, 4, 0.5, 2.0);
-    const temperature = clamp((tempNoise + 1) * 0.5, 0, 1);
-    
-    const humidWarpX = perlin.octaveNoise(wx * 0.0015, 50, wz * 0.0015, 2, 0.5, 2.0) * 40;
-    const humidWarpZ = perlin.octaveNoise(wx * 0.0015, 150, wz * 0.0015, 2, 0.5, 2.0) * 40;
-    const humidNoise = perlin2.octaveNoise((wx + humidWarpX) * 0.0025, 0, (wz + humidWarpZ) * 0.0025, 4, 0.5, 2.0);
-    const humidity = clamp((humidNoise + 1) * 0.5, 0, 1);
-    
-    const contBase = perlin.octaveNoise(wx * 0.0008, 200, wz * 0.0008, 5, 0.55, 2.0);
-    const ridgeNoise = 1 - Math.abs(perlin2.octaveNoise(wx * 0.003, 300, wz * 0.003, 3, 0.5, 2.0));
-    const continentalness = clamp(contBase + 0.4 + ridgeNoise * ridgeNoise * 0.3, 0, 1.5);
-    
-    const erosionNoise = perlin3.octaveNoise(wx * 0.004, 0, wz * 0.004, 3, 0.5, 2.0);
-    const erosion = clamp((erosionNoise + 1) * 0.5, 0, 1);
-    
-    const h = getHeightAt(wx, wz);
-    return getBiome(temperature, humidity, continentalness, erosion, h, seaLevel);
+    // Use the same climate computation as getHeightAt for consistency
+    const climate = computeClimateAt(wx, wz);
+    return climate.biome;
   }
   
   // Helper to check if a tree should spawn at world position
@@ -829,32 +952,50 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
     return { wx, wz, height, treeHeight, leafRadius, biome };
   }
   
-  // Scan a wider area to find all trees that could affect this chunk
-  // Trees can have leaves up to 3 blocks away, so check 4 blocks outside chunk
-  const TREE_SCAN_MARGIN = 4;
-  const treesToPlace = [];
+  const TREE_SCAN_MARGIN = 8; // 3 (leaves) + 5 (spacing) 
+  
+  // First pass: collect all POTENTIAL trees in the scan area
+  const potentialTrees = [];
   
   for (let wx = chunkWorldX - TREE_SCAN_MARGIN; wx < chunkWorldX + CHUNK_SIZE + TREE_SCAN_MARGIN; wx++) {
     for (let wz = chunkWorldZ - TREE_SCAN_MARGIN; wz < chunkWorldZ + CHUNK_SIZE + TREE_SCAN_MARGIN; wz++) {
       const treeInfo = shouldTreeSpawnAt(wx, wz);
       if (treeInfo) {
-        // Check spacing from other trees
-        const minSpacing = treeInfo.biome === BIOME.FOREST ? 3 : 5;
-        let tooClose = false;
-        
-        for (const other of treesToPlace) {
-          const dx = wx - other.wx;
-          const dz = wz - other.wz;
-          if (dx * dx + dz * dz < minSpacing * minSpacing) {
-            tooClose = true;
-            break;
-          }
-        }
-        
-        if (!tooClose) {
-          treesToPlace.push(treeInfo);
+        // Add a priority value based on deterministic random for tiebreaking
+        treeInfo.priority = seededRandom(wx, wz, seed + 7000);
+        potentialTrees.push(treeInfo);
+      }
+    }
+  }
+
+  const treesToPlace = [];
+  
+  for (const tree of potentialTrees) {
+    const { wx, wz, biome, priority } = tree;
+    const minSpacing = biome === BIOME.FOREST ? 3 : 5;
+    let shouldPlace = true;
+    
+    // Check against ALL potential trees
+    for (const other of potentialTrees) {
+      if (other === tree) continue;
+      
+      const dx = wx - other.wx;
+      const dz = wz - other.wz;
+      const distSq = dx * dx + dz * dz;
+      const otherMinSpacing = other.biome === BIOME.FOREST ? 3 : 5;
+      const effectiveMinSpacing = Math.max(minSpacing, otherMinSpacing);
+      
+      if (distSq < effectiveMinSpacing * effectiveMinSpacing) {
+        if (other.priority > priority || 
+            (other.priority === priority && (other.wx < wx || (other.wx === wx && other.wz < wz)))) {
+          shouldPlace = false;
+          break;
         }
       }
+    }
+    
+    if (shouldPlace) {
+      treesToPlace.push(tree);
     }
   }
   
@@ -874,8 +1015,18 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       }
     }
     
-    // If the tree origin isn't inside this chunk, skip placing leaves here.
-    if (!isInChunk) continue;
+    const maxLeafRadius = biome === BIOME.SAVANNA ? leafRadius : leafRadius + 1;
+    const leafMinX = wx - maxLeafRadius;
+    const leafMaxX = wx + maxLeafRadius;
+    const leafMinZ = wz - maxLeafRadius;
+    const leafMaxZ = wz + maxLeafRadius;
+    const chunkMaxX = chunkWorldX + CHUNK_SIZE - 1;
+    const chunkMaxZ = chunkWorldZ + CHUNK_SIZE - 1;
+    const leavesIntersectChunk = !(leafMaxX < chunkWorldX || leafMinX > chunkMaxX || 
+                                   leafMaxZ < chunkWorldZ || leafMinZ > chunkMaxZ);
+    
+    if (!leavesIntersectChunk) continue;
+    
     const leafStart = biome === BIOME.SAVANNA ? treeHeight - 1 : treeHeight - 2;
     const leafEnd = biome === BIOME.SAVANNA ? treeHeight + 2 : treeHeight + 3;
     
@@ -904,10 +1055,12 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
               const leafIdx = leafColBase + (leafY - MIN_Y);
               
               if (leafIdx >= 0 && leafIdx < size && data[leafIdx] === 0) {
-                // Random leaf gaps for natural look
-                const leafRand = hash3(leafWorldX, leafY, leafWorldZ);
-                if (leafRand > 0.12) {
-                  data[leafIdx] = 7; // leaves
+                const actualTerrainHeight = getHeightAt(leafWorldX, leafWorldZ);
+                if (leafY > actualTerrainHeight) {
+                  const leafRand = hash3(leafWorldX, leafY, leafWorldZ);
+                  if (leafRand > 0.12) {
+                    data[leafIdx] = 7; // leaves
+                  }
                 }
               }
             }

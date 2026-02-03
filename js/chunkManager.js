@@ -3,7 +3,7 @@
 // OPTIMIZED: Uses merged BufferGeometry with face culling for minimal draw calls.
 
 import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
-import { SEED, RENDER, TREES, DEBUG } from './config.js';
+import { SEED, RENDER, TREES, DEBUG, COLORS } from './config.js';
 import * as THREE from './three.module.js';
 
 // Block IDs
@@ -147,6 +147,7 @@ export default class ChunkManager {
       dirt: 'assets/textures/block/dirt.png',
       sand: 'assets/textures/block/sand.png',
       grassSide: 'assets/textures/block/grass_block_side.png',
+      grassSideOverlay: 'assets/textures/block/grass_block_side_overlay.png',
       grassTop: 'assets/textures/block/grass_block_top.png',
       stone: 'assets/textures/block/stone.png',
       gravel: 'assets/textures/block/gravel.png',
@@ -198,19 +199,21 @@ export default class ChunkManager {
     const woodSideMat = withMap('oakSide');
     const woodTopMat = withMap('oakTop');
 
-    const cactusMat = withMap('cactus');
+    const cactusMat = mat({ map: T.cactus, color: COLORS.cactus });
 
-    const grassSideMat = withMap('grassSide');
-    const grassTopMat = withMap('grassTop');
+    // Grass side: base texture (dirt+gray grass) + overlay with color tint
+    const grassSideBaseMat = withMap('grassSide'); // Base texture without tint
+    const grassSideOverlayMat = mat({ map: T.grassSideOverlay, color: COLORS.grassSide, transparent: true, depthWrite: false });
+    const grassTopMat = mat({ map: T.grassTop, color: COLORS.grassTop });
     const grassBottomMat = dirtMat;
 
     const grassSnowSideMat = withMap('grassSnowSide');
     const grassSnowTopMat = withMap('snow');
 
-    const leavesMat = mat({ map: T.oakLeaves, transparent: true, opacity: 0.9, alphaTest: 0.5 });
+    const leavesMat = mat({ map: T.oakLeaves, transparent: false, alphaTest: 0.5, color: COLORS.leaves });
 
     const deadBushMat = mat({ map: T.deadBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-    const tallGrassMat = mat({ map: T.tallGrass, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const tallGrassMat = mat({ map: T.tallGrass, color: COLORS.tallGrass, transparent: false, alphaTest: 0.5, side: THREE.DoubleSide });
     const roseBushMat = mat({ map: T.roseBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
     const sunflowerMat = mat({ map: T.sunflower, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
 
@@ -236,7 +239,8 @@ export default class ChunkManager {
       roseBush: roseBushMat,
       sunflower: sunflowerMat,
       // Per-face materials for grass, snowy grass, wood, and cactus
-      grass: [grassSideMat, grassSideMat, grassTopMat, grassBottomMat, grassSideMat, grassSideMat],
+      grass: [grassSideBaseMat, grassSideBaseMat, grassTopMat, grassBottomMat, grassSideBaseMat, grassSideBaseMat],
+      grassOverlay: [grassSideOverlayMat, grassSideOverlayMat, null, null, grassSideOverlayMat, grassSideOverlayMat], // Overlay for sides only
       grassSnow: [grassSnowSideMat, grassSnowSideMat, grassSnowTopMat, grassBottomMat, grassSnowSideMat, grassSnowSideMat],
       wood: [woodSideMat, woodSideMat, woodTopMat, woodTopMat, woodSideMat, woodSideMat],
       cactus: [cactusMat, cactusMat, cactusMat, cactusMat, cactusMat, cactusMat]
@@ -422,9 +426,14 @@ export default class ChunkManager {
 
             // Determine material key
             let matKey;
+            let overlayMatKey = null; // For blocks needing overlay (grass)
             switch (blockId) {
               case BLOCK_GRASS:
                 matKey = `grass_${faceIdx}`;
+                // Add overlay for side faces only (not top=2 or bottom=3)
+                if (faceIdx !== 2 && faceIdx !== 3) {
+                  overlayMatKey = `grassOverlay_${faceIdx}`;
+                }
                 break;
               case BLOCK_GRASS_SNOW:
                 matKey = `grassSnow_${faceIdx}`;
@@ -508,6 +517,17 @@ export default class ChunkManager {
               faceIdx: faceIdx,
               uvRot: uvRot
             });
+
+            // Add overlay face for grass sides (colored overlay on top of base)
+            if (overlayMatKey) {
+              if (!faceLists[overlayMatKey]) faceLists[overlayMatKey] = [];
+              faceLists[overlayMatKey].push({
+                x: worldX, y: worldY, z: worldZ,
+                corners: corners,
+                faceIdx: faceIdx,
+                uvRot: uvRot
+              });
+            }
           }
         }
       }
@@ -602,6 +622,9 @@ export default class ChunkManager {
       if (matKey.startsWith('grass_')) {
         const faceIdx = parseInt(matKey.split('_')[1]);
         material = this.materials.grass[faceIdx];
+      } else if (matKey.startsWith('grassOverlay_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.grassOverlay[faceIdx];
       } else if (matKey.startsWith('grassSnow_')) {
         const faceIdx = parseInt(matKey.split('_')[1]);
         material = this.materials.grassSnow[faceIdx];

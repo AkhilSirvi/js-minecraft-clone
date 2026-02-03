@@ -2,8 +2,10 @@ import * as THREE from './three.module.js';
 import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y, getBiomeAtWorld } from './chunkGen.js';
 import ChunkManager, { isBlockPassable } from './chunkManager.js';
 import { initInteraction } from './interaction.js';
+import BlockBreaker from './blockBreaker.js';
 import createDebugOverlay from './debugOverlay.js';
 import { SEED, PLAYER, PHYSICS, RENDER, DAY_NIGHT, CAMERA, DEBUG } from './config.js';
+import WaterPhysics from './waterPhysics.js';
 
 // Game settings (modifiable via settings menu)
 const gameSettings = {
@@ -188,29 +190,28 @@ function main() {
   let lastFpsUpdate = performance.now();
   let currentFPS = 0;
   let fpsDisplay = null;
-  if (gameSettings.showFPS) {
-    fpsDisplay = document.createElement('div');
-    fpsDisplay.style.cssText = 'position:fixed;top:10px;left:10px;background:rgba(0,0,0,0.7);color:#0f0;padding:5px 10px;font-family:monospace;font-size:14px;z-index:1000;pointer-events:none;';
-    document.body.appendChild(fpsDisplay);
-  }
 
-  // Procedural chunk streaming manager
-  // Use block-coordinate units: 1 block == 1 world unit
   const blockSize = 1; // blocks per unit
-  if (DEBUG.showStartupInfo) console.log('Creating ChunkManager (seed, blockSize, viewDistance)=', SEED, blockSize, gameSettings.viewDistance);
   const cm = new ChunkManager(scene, { seed: SEED, blockSize, viewDistance: gameSettings.viewDistance });
-  // initial load around origin
+  if (DEBUG.showStartupInfo) console.log('Creating ChunkManager (seed, blockSize, viewDistance)=', SEED, blockSize, gameSettings.viewDistance);
   if (DEBUG.showStartupInfo) console.log('Initial chunk load around origin starting');
   if (DEBUG.showStartupInfo) console.log('Initial chunk load completed');
+
+  // Initialize water physics system
+  let waterPhysics = null;
+  try {
+    waterPhysics = new WaterPhysics(cm, scene);
+  } catch (error) {
+    console.error('Failed to initialize water physics:', error);
+    console.error('Error stack:', error.stack);
+  }
 
   // Debug overlay (F3)
   const debugOverlay = createDebugOverlay();
   let showDebug = false;
   let lastDebugUpdate = 0;
   const debugUpdateInterval = 250; // Update debug info 4 times per second
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'F3') { debugOverlay.toggle(); showDebug = !showDebug; }
-  });
+  window.addEventListener('keydown', (e) => {if (e.code === 'F3') { debugOverlay.toggle(); showDebug = !showDebug; }});
 
   // reusable raycaster and temp vectors to avoid per-frame allocations
   const raycaster = new THREE.Raycaster();
@@ -218,18 +219,13 @@ function main() {
   const tempWorldPoint = new THREE.Vector3();
   const tempVec2 = new THREE.Vector2();
 
-    // Highlight box for block the player is looking at
-    const highlightMaterial = new THREE.LineBasicMaterial({
-      color: 0xffffff,
-      depthTest: true,
-      transparent: true,
-      opacity: 0.5
-    });
-    const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.00, 1.00, 1.00));
-    const highlightBox = new THREE.LineSegments(highlightGeometry, highlightMaterial);
-    highlightBox.renderOrder = 9999;
-    highlightBox.visible = false;
-    scene.add(highlightBox);
+  // Highlight box for block the player is looking at
+  const highlightMaterial = new THREE.LineBasicMaterial({color: 0x000000, depthTest: true, transparent: true, opacity: 0.6});
+  const highlightGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1.00, 1.00, 1.00));
+  const highlightBox = new THREE.LineSegments(highlightGeometry, highlightMaterial);
+  highlightBox.renderOrder = 9999;
+  highlightBox.visible = false;
+  scene.add(highlightBox);
   
   // helper: test whether player's rectangular box at given world x,z and center y would intersect any solid block
   function isPlayerPositionFree(testX, testY, testZ, height = null) {
@@ -239,13 +235,11 @@ function main() {
     const halfHeight = checkHeight / 2;
     const bottomY = testY - halfHeight;
     const topY = testY + halfHeight;
-    
     // Player AABB bounds
     const playerMinX = testX - playerHalfWidth;
     const playerMaxX = testX + playerHalfWidth;
     const playerMinZ = testZ - playerHalfDepth;
     const playerMaxZ = testZ + playerHalfDepth;
-    
     // Get block range that could intersect (shrink slightly to avoid floating point edge issues)
     const epsilon = 0.001;
     const minBlockX = Math.floor((playerMinX + epsilon) / bs);
@@ -254,12 +248,10 @@ function main() {
     const maxBlockZ = Math.floor((playerMaxZ - epsilon) / bs);
     const minBlockY = Math.floor((bottomY + epsilon - MIN_Y * bs) / bs) + MIN_Y;
     const maxBlockY = Math.floor((topY - epsilon - MIN_Y * bs) / bs) + MIN_Y;
-    
     for (let bx = minBlockX; bx <= maxBlockX; bx++) {
       for (let bz = minBlockZ; bz <= maxBlockZ; bz++) {
         for (let by = minBlockY; by <= maxBlockY; by++) {
           const id = cm.getBlockAtWorld(bx * bs + 0.5 * bs, by * bs + 0.5 * bs, bz * bs + 0.5 * bs);
-          // Use isBlockPassable to check if this block allows player passage
           if (!isBlockPassable(id)) return false; // blocked by solid block
         }
       }
@@ -269,45 +261,20 @@ function main() {
 
   // Push player out of solid blocks if stuck
   function resolvePlayerCollision() {
-    const bs = blockSize;
-    const maxPushDist = 2.0; // max distance to search for free space
-    const pushStep = 0.001;
-    
-    // If already free, nothing to do
-    if (isPlayerPositionFree(player.position.x, player.position.y, player.position.z)) {
-      return;
-    }
-    
-    // Try pushing up first (most common case - stuck in ground)
+    const bs = blockSize; const maxPushDist = 2.0; const pushStep = 0.001;
+    if (isPlayerPositionFree(player.position.x, player.position.y, player.position.z)) {return;}
     for (let dy = pushStep; dy <= maxPushDist; dy += pushStep) {
-      if (isPlayerPositionFree(player.position.x, player.position.y + dy, player.position.z)) {
-        player.position.y += dy;
-        velY = 0;
-        return;
-      }
+      if (isPlayerPositionFree(player.position.x, player.position.y + dy, player.position.z)) {player.position.y += dy; velY = 0; return;}
     }
-    
-    // Try pushing horizontally in all directions
-    const directions = [
-      [1, 0], [-1, 0], [0, 1], [0, -1],
-      [1, 1], [1, -1], [-1, 1], [-1, -1]
-    ];
+    const directions = [[1, 0], [-1, 0], [0, 1], [0, -1],[1, 1], [1, -1], [-1, 1], [-1, -1]];
     for (let dist = pushStep; dist <= maxPushDist; dist += pushStep) {
       for (const [dx, dz] of directions) {
         const len = Math.hypot(dx, dz);
         const pushX = player.position.x + (dx / len) * dist;
         const pushZ = player.position.z + (dz / len) * dist;
-        if (isPlayerPositionFree(pushX, player.position.y, pushZ)) {
-          player.position.x = pushX;
-          player.position.z = pushZ;
-          velocity.x = 0;
-          velocity.z = 0;
-          return;
-        }
+        if (isPlayerPositionFree(pushX, player.position.y, pushZ)) { player.position.x = pushX; player.position.z = pushZ; velocity.x = 0; velocity.z = 0; return;}
       }
     }
-    
-    // Try pushing up + horizontal as last resort
     for (let dy = pushStep; dy <= maxPushDist; dy += pushStep) {
       for (let dist = pushStep; dist <= maxPushDist; dist += pushStep) {
         for (const [dx, dz] of directions) {
@@ -315,13 +282,7 @@ function main() {
           const pushX = player.position.x + (dx / len) * dist;
           const pushZ = player.position.z + (dz / len) * dist;
           if (isPlayerPositionFree(pushX, player.position.y + dy, pushZ)) {
-            player.position.x = pushX;
-            player.position.y += dy;
-            player.position.z = pushZ;
-            velocity.x = 0;
-            velocity.z = 0;
-            velY = 0;
-            return;
+            player.position.x = pushX; player.position.y += dy; player.position.z = pushZ; velocity.x = 0; velocity.z = 0; velY = 0; return;
           }
         }
       }
@@ -334,30 +295,22 @@ function main() {
   if (!isFinite(spawnY)) spawnY = (MIN_Y + 1) * blockSize;
   const spawnX = spawnWorldX;
   const spawnZ = spawnWorldZ;
-
   const camera = new THREE.PerspectiveCamera(gameSettings.fov, window.innerWidth / window.innerHeight, RENDER.nearClip, RENDER.farClip);
   let defaultFov = gameSettings.fov;
   let sprintFov = defaultFov + 15; // Increase FOV by 15 when sprinting
   let targetFov = defaultFov;
-  let fovLerpSpeed = 0.15; // How quickly FOV changes
-
-  // player collision size (from config)
+  let fovLerpSpeed = 0.15;
   const playerWidth = blockSize * PLAYER.width;
-  const playerRadius = playerWidth / 2;
   const playerHeight = blockSize * PLAYER.height;
-  
   // Player hitbox half-extents for rectangular collision (width x height x depth)
   const playerHalfWidth = playerWidth / 2;  // X half-extent
-  const playerHalfDepth = playerWidth / 2;  // Z half-extent (same as width for square hitbox)
-
+  const playerHalfDepth = playerWidth / 2;  // Z half-extent
   // third-person / first-person toggle state
   let isThirdPerson = false;
   const fpCameraLocalPos = new THREE.Vector3(0, 0, 0);
-  const tpCameraLocalPos = new THREE.Vector3(0, playerHeight * CAMERA.thirdPersonHeight, CAMERA.thirdPersonDistance);
-  // create player root before constructing a visible model (avoid TDZ error)
+  const tpCameraLocalPos = new THREE.Vector3(0, 0, CAMERA.thirdPersonDistance);
   const player = new THREE.Object3D();
 
-  // simple player model (visible in third-person)
   const playerMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
   const playerGeometry = new THREE.BoxGeometry(playerWidth, playerHeight, playerWidth);
   const playerModel = new THREE.Mesh(playerGeometry, playerMaterial);
@@ -365,23 +318,22 @@ function main() {
   playerModel.receiveShadow = true;
   // center the model on player's origin (player.position is center)
   playerModel.position.set(0, 0, 0);
-  playerModel.visible = false; // start in first-person
+  playerModel.visible = false;
   player.add(playerModel);
 
   function toggleThirdPerson() {
     isThirdPerson = !isThirdPerson;
-    // prevent browser F5 default
     try { document.exitPointerLock && document.exitPointerLock(); } catch (e) {}
     playerModel.visible = isThirdPerson;
     if (isThirdPerson) {
       camera.position.copy(tpCameraLocalPos);
     } else {
       camera.position.copy(fpCameraLocalPos);
+      camera.rotation.set(0, 0, 0);
     }
   }
 
   // Player object: yaw rotates this, pitch rotates the camera child.
-  // place player at computed spawn above terrain (centered by height)
   player.position.set(spawnX, spawnY + playerHeight / 2, spawnZ);
   scene.add(player);
 
@@ -406,7 +358,6 @@ function main() {
     if (dist <= 0.0001) { camera.position.copy(tpCameraLocalPos); return; }
     dir.normalize();
 
-    // Step along the ray from the eye to the desired camera position and find first blocking block
     const step = 0.1; // meters per sample
     let lastFree = headWorld.clone();
     let blocked = false;
@@ -439,8 +390,64 @@ function main() {
     camera.position.copy(newLocal);
   }
 
-  // Console teleport command: use in DevTools console: `teleport(x,y,z)` or `tp(x,y,z)`
-  // If `y` is omitted, teleport to top of terrain at x,z. Pass `opts = { safe: false }` to skip searching for free space.
+  function updateFirstPersonCameraCollision() {
+    if (isThirdPerson) return;
+    const eyeWorldY = player.position.y + pitchObject.position.y;
+    const eyeWorldX = player.position.x;
+    const eyeWorldZ = player.position.z;
+    
+    // Get camera look direction in world space
+    const lookDir = new THREE.Vector3(0, 0, -1);
+    camera.getWorldDirection(lookDir);
+    
+    const nearClipDist = 0.25; // check distance (more than near clip of 0.1)
+    const checkX = eyeWorldX + lookDir.x * nearClipDist;
+    const checkY = eyeWorldY + lookDir.y * nearClipDist;
+    const checkZ = eyeWorldZ + lookDir.z * nearClipDist;
+    const eyeBlockId = cm.getBlockAtWorld(eyeWorldX, eyeWorldY, eyeWorldZ);
+    const lookBlockId = cm.getBlockAtWorld(checkX, checkY, checkZ);
+    const aboveBlockId = cm.getBlockAtWorld(eyeWorldX, eyeWorldY + 0.25, eyeWorldZ);
+    const eyeBlocked = !isBlockPassable(eyeBlockId);
+    const lookBlocked = !isBlockPassable(lookBlockId);
+    const aboveBlocked = !isBlockPassable(aboveBlockId);
+    
+    if (!eyeBlocked && !lookBlocked && !aboveBlocked) {
+      camera.position.set(0, 0, 0);
+      return;
+    }
+    
+    const bs = blockSize;
+    
+    if (eyeBlocked || aboveBlocked) {
+      const testY = aboveBlocked ? eyeWorldY + 0.25 : eyeWorldY;
+      const blockY = Math.floor((testY - MIN_Y * bs) / bs) + MIN_Y;
+      const blockBottomY = blockY * bs;
+      const safeEyeY = blockBottomY - 0.12;
+      const pushDownAmount = eyeWorldY - safeEyeY;
+      
+      if (pushDownAmount > 0 && pushDownAmount < 1.0) {
+        camera.position.y = -pushDownAmount;
+      } else {
+        camera.position.set(0, 0, 0);
+      }
+    } else if (lookBlocked) {
+      let safeOffset = 0;
+      for (let d = nearClipDist; d >= 0; d -= 0.02) {
+        const testX = eyeWorldX + lookDir.x * d;
+        const testY = eyeWorldY + lookDir.y * d;
+        const testZ = eyeWorldZ + lookDir.z * d;
+        const testBlockId = cm.getBlockAtWorld(testX, testY, testZ);
+        if (isBlockPassable(testBlockId)) {
+          safeOffset = nearClipDist - d;
+          break;
+        }
+      }
+      if (safeOffset > 0) {
+        camera.position.z = safeOffset;
+      }
+    }
+  }
+
   window.teleport = function(x, y, z, opts = {}) {
     const nx = Number(x);
     const nz = Number(z);
@@ -475,8 +482,25 @@ function main() {
     console.log(`Teleported player to (${nx}, ${ny}, ${nz})`);
   };
   window.tp = window.teleport;
+  
+  // Expose waterPhysics to console for testing
+  window.waterPhysics = waterPhysics;
+  window.placeWater = (x, y, z) => {
+    if (!waterPhysics) {
+      console.error('Water physics not initialized');
+      return null;
+    }
+    try {
+      const waterBlock = waterPhysics.placeWater(x, y, z, true);
+      console.log(`Water source placed at (${x}, ${y}, ${z})`);
+      return waterBlock;
+    } catch (error) {
+      console.error('Error placing water:', error);
+      return null;
+    }
+  };
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true , alpha: false });
+  const renderer = new THREE.WebGLRenderer({ antialias: true , alpha: false,powerPreference: "high-performance", stencil: false, depth: true, preserveDrawingBuffer: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -495,10 +519,32 @@ function main() {
     renderer.domElement.requestPointerLock();
   });
 
+  function getFirstPersonRay() {
+    const eyeY = player.position.y + pitchObject.position.y;
+    const origin = new THREE.Vector3(player.position.x, eyeY, player.position.z);
+    const pitch = pitchObject.rotation.x;
+    const yaw = player.rotation.y;
+    const dir = new THREE.Vector3(
+      -Math.sin(yaw) * Math.cos(pitch),
+      -Math.sin(pitch),
+      -Math.cos(yaw) * Math.cos(pitch)
+    );
+    dir.normalize();
+    
+    return { origin, dir };
+  }
+
+  const blockBreaker = new BlockBreaker(cm, scene, camera, { 
+    reach: PLAYER.blockreach,
+    getFirstPersonRay
+  });
+
   // Initialize interaction (mining/placing)
   const interaction = initInteraction(cm, camera, renderer.domElement, {
     placeBlockId: 2,
     reach: PLAYER.blockreach,
+    blockBreaker,
+    getFirstPersonRay,  // Use first-person perspective even in third-person mode
     // Provide current player AABB so interaction can respect crouch/height changes
     getPlayerAABB: () => ({
       minX: player.position.x - playerHalfWidth,
@@ -512,6 +558,9 @@ function main() {
 
   // Movement state
   const move = { forward: false, backward: false, left: false, right: false, sprint: false, crouch: false };
+  
+  // Target block info (updated in animate loop, used by interaction)
+  let targetInfo = null;
 
   // Crouch state
   let isCrouching = false;
@@ -539,6 +588,77 @@ function main() {
       case 'KeyB':
         // Toggle chunk borders (Box3Helpers showing full chunk boundaries)
         try { cm.toggleChunkBorders(); } catch (err) { console.warn('toggleChunkBorders error', err); }
+        break;
+      case 'KeyQ':
+        // Place water adjacent to target block (Q key)
+        e.preventDefault();
+        if (!waterPhysics) {
+          console.log('Water physics not initialized');
+          break;
+        }
+        if (targetInfo) {
+          const { blockX, blockY, blockZ } = targetInfo;
+          const origin = camera.getWorldPosition(new THREE.Vector3());
+          const dir = new THREE.Vector3();
+          camera.getWorldDirection(dir);
+          let hitPoint = null;
+          const step = 0.01;
+          for (let t = 0; t <= PLAYER.blockreach; t += step) {
+            const p = origin.clone().addScaledVector(dir, t);
+            const bid = cm.getBlockAtWorld(p.x, p.y, p.z);
+            if (bid !== 0 && Math.floor(p.x) === blockX && Math.floor(p.y) === blockY && Math.floor(p.z) === blockZ) {
+              hitPoint = p;
+              break;
+            }
+          }
+          
+          if (!hitPoint) {
+            console.log('Could not find hit point');
+            break;
+          }
+          
+          // Determine which face based on hit point position within the block
+          const localX = hitPoint.x - blockX;
+          const localY = hitPoint.y - blockY;
+          const localZ = hitPoint.z - blockZ;
+          
+          
+          let placeX = blockX;
+          let placeY = blockY;
+          let placeZ = blockZ;
+          
+          // Find which face is closest
+          const faces = [
+            { name: 'left', dist: localX, dx: -1, dy: 0, dz: 0 },
+            { name: 'right', dist: 1 - localX, dx: 1, dy: 0, dz: 0 },
+            { name: 'bottom', dist: localY, dx: 0, dy: -1, dz: 0 },
+            { name: 'top', dist: 1 - localY, dx: 0, dy: 1, dz: 0 },
+            { name: 'front', dist: localZ, dx: 0, dy: 0, dz: -1 },
+            { name: 'back', dist: 1 - localZ, dx: 0, dy: 0, dz: 1 }
+          ];
+          
+          faces.sort((a, b) => a.dist - b.dist);
+          const closestFace = faces[0];
+          
+          
+          placeX += closestFace.dx;
+          placeY += closestFace.dy;
+          placeZ += closestFace.dz;
+          
+          // Verify placement position is air
+          const checkBlockId = cm.getBlockAtWorld(placeX + 0.5, placeY + 0.5, placeZ + 0.5);
+          
+          if (checkBlockId !== 0) {
+            console.log('Cannot place water - position occupied by block', checkBlockId);
+            break;
+          }
+          
+          try {
+            const waterBlock = waterPhysics.placeWater(placeX, placeY, placeZ, true);
+          } catch (error) {
+            console.error('Error placing water:', error);
+          }
+        }
         break;
       case 'KeyW': move.forward = true; break;
       case 'KeyS': move.backward = true; break;
@@ -633,6 +753,10 @@ function main() {
     // First, resolve any stuck-in-block situations
     resolvePlayerCollision();
     
+    // Check if player is in water
+    const inWater = waterPhysics ? waterPhysics.isPlayerInWater(player.position) : false;
+    const isSwimming = inWater && move.forward; // Simple swimming detection
+    
     // Calculate input direction from keys
     direction.set(0, 0, 0);
     if (move.forward) direction.z -= 1;
@@ -654,52 +778,17 @@ function main() {
     
     // Handle crouch state
     const wantsToCrouch = move.crouch;
-    if (wantsToCrouch && !isCrouching) {
-      // Start crouching
-      isCrouching = true;
-      currentPlayerHeight = crouchingHeight;
-      // Adjust player position so feet stay on ground
-      const heightDiff = standingHeight - crouchingHeight;
-      player.position.y -= heightDiff / 2;
-      // Update player model
-      playerModel.scale.y = crouchingHeight / standingHeight;
-      playerModel.position.y = 0;
-      // Update camera position
-      pitchObject.position.y = crouchingHeight * CAMERA.eyeHeight;
-    } else if (!wantsToCrouch && isCrouching) {
-      // Try to stand up - check if there's room using rectangular hitbox
-      const heightDiff = standingHeight - crouchingHeight;
-      const newY = player.position.y + heightDiff / 2;
-      // Check if we can stand (head won't hit ceiling) at all corners
-      const headY = newY + standingHeight / 2;
-      const hx = playerHalfWidth * 0.95;
-      const hz = playerHalfDepth * 0.95;
-      const standSamples = [
-        [0, 0],
-        [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz]
-      ];
-      let canStand = true;
-      for (const [ox, oz] of standSamples) {
-        const sx = player.position.x + ox;
-        const sz = player.position.z + oz;
-        const headBlockId = cm.getBlockAtWorld(sx, headY, sz);
-        if (!isBlockPassable(headBlockId)) {
-          canStand = false;
-          break;
-        }
-      }
-      if (canStand) {
-        // Can stand up
-        isCrouching = false;
-        currentPlayerHeight = standingHeight;
-        player.position.y = newY;
-        playerModel.scale.y = 1;
-        playerModel.position.y = 0;
-        pitchObject.position.y = standingHeight * CAMERA.eyeHeight;
-      }
-      // else: stay crouched (blocked by ceiling)
-    }
-    
+    const targetPlayerHeight = wantsToCrouch ? crouchingHeight : standingHeight;
+    const heightLerpSpeed = 10.5;
+    const prevHeight = currentPlayerHeight;
+    currentPlayerHeight += (targetPlayerHeight - currentPlayerHeight) * Math.min(1, heightLerpSpeed * dt);
+    const heightDelta = currentPlayerHeight - prevHeight;
+    player.position.y += heightDelta / 2;
+    const heightThreshold = 0.01;
+    isCrouching = Math.abs(currentPlayerHeight - crouchingHeight) < heightThreshold;
+    playerModel.scale.y = currentPlayerHeight / standingHeight;
+    playerModel.position.y = 0;
+    pitchObject.position.y = currentPlayerHeight * CAMERA.eyeHeight;
     // Determine current speed based on sprint/crouch state
     let currentMaxSpeed = maxSpeed;
     if (isCrouching) {
@@ -708,7 +797,7 @@ function main() {
       currentMaxSpeed = maxSpeed * sprintMultiplier;
     }
     // FOV sprint logic
-    if (move.sprint && move.forward && !isCrouching) {
+    if (move.sprint && move.forward && !isCrouching && (velocity.x !== 0 || velocity.z !== 0)) {
       targetFov = sprintFov;
     } else {
       targetFov = defaultFov;
@@ -759,6 +848,15 @@ function main() {
     // Fast descent when holding shift
     if (move.down && !onGround) velY += gravity * dt; // double gravity
     
+    // Apply water physics if in water
+    if (inWater && waterPhysics) {
+      const waterVel = new THREE.Vector3(velocity.x, velY, velocity.z);
+      waterPhysics.applyWaterPhysics(waterVel, player.position, isSwimming);
+      velocity.x = waterVel.x;
+      velocity.z = waterVel.z;
+      velY = waterVel.y;
+    }
+    
     // Move horizontally with collision (axis-separated for wall sliding)
     const moveX = velocity.x * dt;
     const moveZ = velocity.z * dt;
@@ -787,7 +885,6 @@ function main() {
     // Try X movement
     if (moveX !== 0) {
       const newX = player.position.x + moveX;
-      // Prevent accidentally stepping off edges while crouching: require target ground not to drop far
       const currentBottomY = player.position.y - currentPlayerHeight / 2;
       const currentMaxGround = getMaxGroundAtPosition(player.position.x, player.position.z, currentBottomY);
       const targetMaxGround = getMaxGroundAtPosition(newX, player.position.z, currentBottomY);
@@ -819,38 +916,55 @@ function main() {
       }
     }
     
-    // Apply vertical movement
-    const moveY = velY * dt;
-    player.position.y += moveY;
-    
-    // Ceiling collision - check all corners of rectangular hitbox
+    let moveY = velY * dt;
     if (velY > 0) {
-      const playerTopY = player.position.y + currentPlayerHeight / 2;
+      const currentTopY = player.position.y + currentPlayerHeight / 2;
+      const projectedTopY = currentTopY + moveY;
       const hx = playerHalfWidth * 0.95;
       const hz = playerHalfDepth * 0.95;
       const ceilingSamples = [
         [0, 0],
-        [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz]
+        [-hx, -hz], [hx, -hz], [-hx, hz], [hx, hz],
+        [0, -hz], [0, hz], [-hx, 0], [hx, 0]
       ];
-      let hitCeiling = false;
+      
+      // Find the lowest ceiling that would block our upward movement
       let lowestCeilingY = Infinity;
-      for (const [ox, oz] of ceilingSamples) {
-        const sx = player.position.x + ox;
-        const sz = player.position.z + oz;
-        const headBlockId = cm.getBlockAtWorld(sx, playerTopY, sz);
-        if (!isBlockPassable(headBlockId)) {
-          hitCeiling = true;
-          const bs = blockSize;
-          const gyBlock = Math.floor((playerTopY - MIN_Y * bs) / bs) + MIN_Y;
-          const blockBottomWorldY = gyBlock * bs;
-          if (blockBottomWorldY < lowestCeilingY) lowestCeilingY = blockBottomWorldY;
+      const bs = blockSize;
+      
+      // Check each block layer we might pass through
+      const startBlockY = Math.floor((currentTopY - MIN_Y * bs) / bs) + MIN_Y;
+      const endBlockY = Math.floor((projectedTopY - MIN_Y * bs) / bs) + MIN_Y;
+      
+      for (let blockY = startBlockY; blockY <= endBlockY + 1; blockY++) {
+        const checkY = blockY * bs + bs * 0.5; // center of block
+        for (const [ox, oz] of ceilingSamples) {
+          const sx = player.position.x + ox;
+          const sz = player.position.z + oz;
+          const headBlockId = cm.getBlockAtWorld(sx, checkY, sz);
+          if (!isBlockPassable(headBlockId)) {
+            // This block's bottom is the ceiling
+            const blockBottomWorldY = blockY * bs;
+            if (blockBottomWorldY < lowestCeilingY && blockBottomWorldY > currentTopY - 0.01) {
+              lowestCeilingY = blockBottomWorldY;
+            }
+          }
         }
       }
-      if (hitCeiling) {
-        player.position.y = lowestCeilingY - 0.001 - currentPlayerHeight / 2;
-        velY = 0;
+      
+      // If we found a ceiling, limit our upward movement
+      if (isFinite(lowestCeilingY)) {
+        const maxAllowedTopY = lowestCeilingY - 0.15; // gap to prevent camera clipping when looking up
+        const maxAllowedMove = maxAllowedTopY - currentTopY;
+        if (maxAllowedMove < moveY) {
+          // Clamp movement to stop at ceiling
+          moveY = Math.max(0, maxAllowedMove);
+          velY = 0; // Stop upward velocity
+        }
       }
     }
+    
+    player.position.y += moveY;
     
     // Ground collision using rectangular hitbox corners and edges
     const playerBottomY = player.position.y - currentPlayerHeight / 2;
@@ -888,6 +1002,59 @@ function main() {
     } else {
       onGround = false;
     }
+  }
+
+  function calculateAdvancedLight(x, y, z) {
+    const directions = [
+      { dx: 0, dz: 0, weight: 1.0 },      // straight up (most important)
+      { dx: 1, dz: 0, weight: 0.7 },      // up-east
+      { dx: -1, dz: 0, weight: 0.7 },     // up-west
+      { dx: 0, dz: 1, weight: 0.7 },      // up-north
+      { dx: 0, dz: -1, weight: 0.7 },     // up-south
+      { dx: 1, dz: 1, weight: 0.5 },      // up-northeast
+      { dx: -1, dz: 1, weight: 0.5 },     // up-northwest
+      { dx: 1, dz: -1, weight: 0.5 },     // up-southeast
+      { dx: -1, dz: -1, weight: 0.5 }     // up-southwest
+    ];
+    
+    let maxLight = 0;
+    let totalWeight = 0;
+    let weightedLightSum = 0;
+    
+    for (const dir of directions) {
+      const sampleX = x + dir.dx * blockSize * 0.5;
+      const sampleZ = z + dir.dz * blockSize * 0.5;
+      const topY = cm.getTopAtWorld(sampleX, sampleZ);
+      
+      if (!isFinite(topY)) continue;
+      
+      let dirLight = 0;
+      if (topY <= Math.floor(y)) {
+        // Player is above or at surface level in this direction
+        dirLight = 15;
+      } else {
+        // Calculate light based on distance to surface
+        const distanceToSurface = Math.floor(topY) - Math.floor(y);
+        // Light decreases more gradually: 1 light level per 2 blocks instead of 1:1
+        dirLight = Math.max(0, 15 - Math.floor(distanceToSurface / 2));
+      }
+      
+      // Track maximum light from any direction
+      if (dirLight > maxLight) {
+        maxLight = dirLight;
+      }
+      
+      // Also calculate weighted average
+      weightedLightSum += dirLight * dir.weight;
+      totalWeight += dir.weight;
+    }
+    
+    // Use weighted average but ensure we keep some of the max light
+    const avgLight = totalWeight > 0 ? weightedLightSum / totalWeight : 0;
+    // Blend 70% weighted average with 30% max light for more natural feel
+    const finalLight = Math.round(avgLight * 0.7 + maxLight * 0.3);
+    
+    return Math.max(0, Math.min(15, finalLight));
   }
 
   function animate() {
@@ -932,6 +1099,15 @@ function main() {
     // Update chunk manager around current player position (queue loads)
     cm.update(player.position.x, player.position.z);
     // Chunk loading is now handled by a timer, not per-frame
+    
+    // Update water physics system
+    if (waterPhysics) {
+      try {
+        waterPhysics.update(frameDelta);
+      } catch (error) {
+        console.error('Water physics update error:', error);
+      }
+    }
 
     // Day / night update
     const now = performance.now() / 1000;
@@ -975,7 +1151,7 @@ function main() {
       // day
       sunIntensity = 1;
       moonIntensity = 0;
-      ambientRatio = 1.0;
+      ambientRatio = 2.0;
     } else if (t < duskEnd) {
       // dusk fading
       const p = (t - dayEnd) / DUSK_LENGTH; // 0..1
@@ -988,10 +1164,32 @@ function main() {
       moonIntensity = 1;
       ambientRatio = 0.2;
     }
+    // smooth skylight-driven intensity changes using advanced multi-directional sampling
+    const desiredSkyLight = calculateAdvancedLight(
+      player.position.x,
+      player.position.y,
+      player.position.z
+    );
 
-    sunLight.intensity = Math.max(0, sunIntensity);
-    moonLight.intensity = Math.max(0, 0.25 * moonIntensity);
-    ambient.intensity = 0.25 + 0.75 * ambientRatio;
+    // persistent smoothed skylight stored on cm to survive frames
+    if (cm._smoothedSkyLight === undefined) cm._smoothedSkyLight = desiredSkyLight;
+    // smoothing speed (per second)
+    const SKY_SMOOTH_SPEED = 6.0;
+    const skyAlpha = Math.min(1, SKY_SMOOTH_SPEED * frameDelta);
+    cm._smoothedSkyLight += (desiredSkyLight - cm._smoothedSkyLight) * skyAlpha;
+    const smoothedSkyLight = cm._smoothedSkyLight;
+
+    // compute target intensities from smoothed skylight
+    const targetSunIntensity = Math.max(0, (smoothedSkyLight / 15) * sunIntensity);
+    const targetMoonIntensity = Math.max(0, 0.25 * (smoothedSkyLight / 15) * moonIntensity);
+    const targetAmbient = 0.1 + 0.75 * (smoothedSkyLight / 15) * ambientRatio;
+
+    // smoothly apply to actual lights
+    const LIGHT_SMOOTH_SPEED = 8.0;
+    const lightAlpha = Math.min(1, LIGHT_SMOOTH_SPEED * frameDelta);
+    sunLight.intensity += (targetSunIntensity - sunLight.intensity) * lightAlpha;
+    moonLight.intensity += (targetMoonIntensity - moonLight.intensity) * lightAlpha;
+    ambient.intensity += (targetAmbient - ambient.intensity) * lightAlpha;
 
     // sky color blend (reuse skyColor to avoid allocation)
     skyColor.copy(skyNight).lerp(skyDay, ambientRatio);
@@ -1000,7 +1198,7 @@ function main() {
     // Always update highlight box and target block every frame
     raycaster.setFromCamera(tempVec2.set(0, 0), camera);
     raycaster.far = PLAYER.blockreach;
-    let targetInfo = null;
+    targetInfo = null;
     camera.getWorldPosition(tempLocalPoint);
     camera.getWorldDirection(tempWorldPoint);
     const maxDist = raycaster.far || 50;
@@ -1049,14 +1247,11 @@ function main() {
       else if (normYaw >= 135 && normYaw < 225) facingName = 'North (Towards +Z)';
       else facingName = 'East (Towards +X)';
 
-      // Head block id (block where player's eye is located)
       const headY = player.position.y + currentPlayerHeight * CAMERA.eyeHeight;
       const headBlockId = cm.getBlockAtWorld(player.position.x, headY, player.position.z);
 
-      // Simple client light estimate: sky light (exposed to sky?) and block light (nearby light sources)
-      const topY = cm.getTopAtWorld(player.position.x, player.position.z);
-      const skyLight = (topY <= Math.floor(player.position.y)) ? 15 : Math.max(0, 15 - (Math.floor(topY) - Math.floor(player.position.y)));
-      const blockLight = (targetInfo && targetInfo.id === 4) ? 5 : 0; // crude: if looking at water show some block light
+      const skyLight = calculateAdvancedLight(player.position.x, player.position.y, player.position.z);
+      const blockLight = (targetInfo && targetInfo.id === 4) ? 5 : 0;
 
       // Renderer statistics
       const rinfo = renderer.info || { memory: {}, render: {} };
@@ -1083,18 +1278,33 @@ function main() {
         rendererStats
       });
     }
-    // If third-person, update camera position with collision and make it look at player's head
+
     if (isThirdPerson) {
       updateThirdPersonCameraCollision();
-      const lookY = player.position.y + currentPlayerHeight * CAMERA.eyeHeight;
-      camera.lookAt(player.position.x, lookY, player.position.z);
+      const headWorld = new THREE.Vector3(
+        player.position.x,
+        player.position.y + currentPlayerHeight * CAMERA.eyeHeight,
+        player.position.z
+      );
+      const camWorld = new THREE.Vector3();
+      camera.getWorldPosition(camWorld);
+      const camLocalPos = camera.position.clone();
+      const lookDir = camLocalPos.clone().negate().normalize();
+      if (camLocalPos.lengthSq() > 0.001) {
+        const localYaw = Math.atan2(-lookDir.x, -lookDir.z);
+        const localPitch = Math.asin(lookDir.y);
+        camera.rotation.set(localPitch, localYaw, 0, 'YXZ');
+      }
+    } else {
+      updateFirstPersonCameraCollision();
     }
+    // Update block breaker (timed-break + overlay)
+    try { if (typeof blockBreaker !== 'undefined' && blockBreaker) blockBreaker.update(frameDelta); } catch (e) {}
     renderer.render(scene, camera);
     prevTime = time;
   }
   animate();
 
-  // Decouple chunk loading from frame rate: process chunk load queue at fixed interval
   if (typeof cm.processLoadQueue === 'function') {
     setInterval(() => {
       cm.processLoadQueue();
