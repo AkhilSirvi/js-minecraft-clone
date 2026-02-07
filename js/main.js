@@ -1,5 +1,7 @@
 import * as THREE from './three.module.js';
-import { generateChunk, CHUNK_SIZE, HEIGHT, MIN_Y, getBiomeAtWorld } from './chunkGen.js';
+import {initMenu, gameSettings} from './GUI.js';
+import { createClouds } from './clouds.js';
+import { CHUNK_SIZE, MIN_Y, getBiomeAtWorld } from './chunkGen.js';
 import ChunkManager, { isBlockPassable } from './chunkManager.js';
 import { initInteraction } from './interaction.js';
 import BlockBreaker from './blockBreaker.js';
@@ -7,146 +9,9 @@ import createDebugOverlay from './debugOverlay.js';
 import { SEED, PLAYER, PHYSICS, RENDER, DAY_NIGHT, CAMERA, DEBUG } from './config.js';
 import WaterPhysics from './waterPhysics.js';
 
-// Game settings (modifiable via settings menu)
-const gameSettings = {
-  viewDistance: RENDER.viewDistance,
-  fov: RENDER.fov,
-  showFPS: RENDER.showFPS,
-  mouseSensitivity: CAMERA.mouseSensitivity,
-  volume: 1.0
-};
 
-// Load saved settings from localStorage
-function loadSettings() {
-  try {
-    const saved = localStorage.getItem('minecraftjs_settings');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      Object.assign(gameSettings, parsed);
-    }
-  } catch (e) {
-    console.warn('Could not load settings:', e);
-  }
-}
 
-// Save settings to localStorage
-function saveSettings() {
-  try {
-    localStorage.setItem('minecraftjs_settings', JSON.stringify(gameSettings));
-  } catch (e) {
-    console.warn('Could not save settings:', e);
-  }
-}
-
-// Menu handling
-let gameStarted = false;
-
-function initMenu() {
-  const mainMenu = document.getElementById('main-menu');
-  const playButton = document.getElementById('play-button');
-  const settingsButton = document.getElementById('settings-button');
-  const settingsMenu = document.getElementById('settings-menu');
-  const settingsBack = document.getElementById('settings-back');
-  const settingsSave = document.getElementById('settings-save');
-  const loadingText = document.getElementById('loading-text');
-  const crosshair = document.getElementById('crosshair');
-
-  // Settings inputs
-  const viewDistanceInput = document.getElementById('setting-view-distance');
-  const viewDistanceValue = document.getElementById('view-distance-value');
-  const fovInput = document.getElementById('setting-fov');
-  const fovValue = document.getElementById('fov-value');
-  const showFpsInput = document.getElementById('setting-show-fps');
-  const sensitivityInput = document.getElementById('setting-sensitivity');
-  const sensitivityValue = document.getElementById('sensitivity-value');
-  const volumeInput = document.getElementById('setting-volume');
-  const volumeValue = document.getElementById('volume-value');
-
-  // Load saved settings
-  loadSettings();
-
-  // Apply loaded settings to UI
-  function updateSettingsUI() {
-    viewDistanceInput.value = gameSettings.viewDistance;
-    viewDistanceValue.textContent = gameSettings.viewDistance;
-    fovInput.value = gameSettings.fov;
-    fovValue.textContent = gameSettings.fov + '°';
-    showFpsInput.checked = gameSettings.showFPS;
-    // Convert sensitivity back to slider value (0.001-0.004 -> 1-20)
-    const sensSlider = Math.round((gameSettings.mouseSensitivity - 0.0005) / 0.00025);
-    sensitivityInput.value = Math.max(1, Math.min(20, sensSlider));
-    sensitivityValue.textContent = sensitivityInput.value;
-    volumeInput.value = Math.round(gameSettings.volume * 100);
-    volumeValue.textContent = volumeInput.value + '%';
-  }
-
-  updateSettingsUI();
-
-  // Hide crosshair until game starts
-  if (crosshair) crosshair.style.display = 'none';
-
-  // Settings input handlers
-  viewDistanceInput.addEventListener('input', () => {
-    viewDistanceValue.textContent = viewDistanceInput.value;
-  });
-
-  fovInput.addEventListener('input', () => {
-    fovValue.textContent = fovInput.value + '°';
-  });
-
-  sensitivityInput.addEventListener('input', () => {
-    sensitivityValue.textContent = sensitivityInput.value;
-  });
-
-  volumeInput.addEventListener('input', () => {
-    volumeValue.textContent = volumeInput.value + '%';
-  });
-
-  // Open settings
-  settingsButton.addEventListener('click', () => {
-    updateSettingsUI();
-    settingsMenu.classList.remove('hidden');
-  });
-
-  // Close settings without saving
-  settingsBack.addEventListener('click', () => {
-    settingsMenu.classList.add('hidden');
-    updateSettingsUI(); // Reset to saved values
-  });
-
-  // Save settings
-  settingsSave.addEventListener('click', () => {
-    gameSettings.viewDistance = parseInt(viewDistanceInput.value);
-    gameSettings.fov = parseInt(fovInput.value);
-    gameSettings.showFPS = showFpsInput.checked;
-    // Convert slider (1-20) to sensitivity (0.00075-0.005)
-    gameSettings.mouseSensitivity = 0.0005 + (parseInt(sensitivityInput.value) * 0.00025);
-    gameSettings.volume = parseInt(volumeInput.value) / 100;
-    
-    saveSettings();
-    settingsMenu.classList.add('hidden');
-  });
-
-  // Play button
-  playButton.addEventListener('click', () => {
-    if (gameStarted) return;
-    gameStarted = true;
-    
-    // Show loading indicator
-    playButton.disabled = true;
-    playButton.textContent = 'Loading...';
-    loadingText.classList.add('visible');
-
-    // Small delay to show loading state, then start game
-    setTimeout(() => {
-      mainMenu.classList.add('hidden');
-      if (crosshair) crosshair.style.display = '';
-      main();
-    }, 100);
-  });
-}
-
-function main() {
+export function main() {
   if (DEBUG.showStartupInfo) console.log('Initializing renderer and scene');
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(DAY_NIGHT.skyDayColor);
@@ -167,6 +32,9 @@ function main() {
   scene.add(sunMesh);
   scene.add(moonMesh);
 
+  // create clouds in a separate module
+  const clouds = createClouds(scene, { planeSize: 2048, centerY: 192, thickness: 5, pixelScale: 10 });
+
   // Day-night cycle parameters (from config)
   const CYCLE_LENGTH = DAY_NIGHT.cycleLength;
   const DAY_LENGTH = DAY_NIGHT.dayLength;
@@ -175,11 +43,7 @@ function main() {
   const DAWN_LENGTH = TRANSITION_TOTAL / 2;
   const NIGHT_LENGTH = DAY_NIGHT.nightLength;
 
-  const skyDay = new THREE.Color(DAY_NIGHT.skyDayColor);
-  const skyNight = new THREE.Color(DAY_NIGHT.skyNightColor);
-  const skyColor = new THREE.Color(); // reusable for lerping
-
-  const cycleStart = performance.now() / 1000  - 320; // seconds
+  const cycleStart = performance.now() / 1000  - 520; // seconds
 
   // Reusable vectors for sun/moon positioning (avoid allocations in render loop)
   const sunPos = new THREE.Vector3();
@@ -502,7 +366,7 @@ function main() {
 
   const renderer = new THREE.WebGLRenderer({ antialias: true , alpha: false,powerPreference: "high-performance", stencil: false, depth: true, preserveDrawingBuffer: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, RENDER.maxPixelRatio));
+  renderer.setPixelRatio(RENDER.maxPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(DAY_NIGHT.skyDayColor, 1);
   renderer.domElement.style.position = 'fixed';
@@ -753,10 +617,6 @@ function main() {
     // First, resolve any stuck-in-block situations
     resolvePlayerCollision();
     
-    // Check if player is in water
-    const inWater = waterPhysics ? waterPhysics.isPlayerInWater(player.position) : false;
-    const isSwimming = inWater && move.forward; // Simple swimming detection
-    
     // Calculate input direction from keys
     direction.set(0, 0, 0);
     if (move.forward) direction.z -= 1;
@@ -844,18 +704,6 @@ function main() {
     // Apply gravity
     velY += gravity * dt;
     if (velY < terminalVelocity) velY = terminalVelocity;
-    
-    // Fast descent when holding shift
-    if (move.down && !onGround) velY += gravity * dt; // double gravity
-    
-    // Apply water physics if in water
-    if (inWater && waterPhysics) {
-      const waterVel = new THREE.Vector3(velocity.x, velY, velocity.z);
-      waterPhysics.applyWaterPhysics(waterVel, player.position, isSwimming);
-      velocity.x = waterVel.x;
-      velocity.z = waterVel.z;
-      velY = waterVel.y;
-    }
     
     // Move horizontally with collision (axis-separated for wall sliding)
     const moveX = velocity.x * dt;
@@ -1004,59 +852,6 @@ function main() {
     }
   }
 
-  function calculateAdvancedLight(x, y, z) {
-    const directions = [
-      { dx: 0, dz: 0, weight: 1.0 },      // straight up (most important)
-      { dx: 1, dz: 0, weight: 0.7 },      // up-east
-      { dx: -1, dz: 0, weight: 0.7 },     // up-west
-      { dx: 0, dz: 1, weight: 0.7 },      // up-north
-      { dx: 0, dz: -1, weight: 0.7 },     // up-south
-      { dx: 1, dz: 1, weight: 0.5 },      // up-northeast
-      { dx: -1, dz: 1, weight: 0.5 },     // up-northwest
-      { dx: 1, dz: -1, weight: 0.5 },     // up-southeast
-      { dx: -1, dz: -1, weight: 0.5 }     // up-southwest
-    ];
-    
-    let maxLight = 0;
-    let totalWeight = 0;
-    let weightedLightSum = 0;
-    
-    for (const dir of directions) {
-      const sampleX = x + dir.dx * blockSize * 0.5;
-      const sampleZ = z + dir.dz * blockSize * 0.5;
-      const topY = cm.getTopAtWorld(sampleX, sampleZ);
-      
-      if (!isFinite(topY)) continue;
-      
-      let dirLight = 0;
-      if (topY <= Math.floor(y)) {
-        // Player is above or at surface level in this direction
-        dirLight = 15;
-      } else {
-        // Calculate light based on distance to surface
-        const distanceToSurface = Math.floor(topY) - Math.floor(y);
-        // Light decreases more gradually: 1 light level per 2 blocks instead of 1:1
-        dirLight = Math.max(0, 15 - Math.floor(distanceToSurface / 2));
-      }
-      
-      // Track maximum light from any direction
-      if (dirLight > maxLight) {
-        maxLight = dirLight;
-      }
-      
-      // Also calculate weighted average
-      weightedLightSum += dirLight * dir.weight;
-      totalWeight += dir.weight;
-    }
-    
-    // Use weighted average but ensure we keep some of the max light
-    const avgLight = totalWeight > 0 ? weightedLightSum / totalWeight : 0;
-    // Blend 70% weighted average with 30% max light for more natural feel
-    const finalLight = Math.round(avgLight * 0.7 + maxLight * 0.3);
-    
-    return Math.max(0, Math.min(15, finalLight));
-  }
-
   function animate() {
     requestAnimationFrame(animate);
     
@@ -1100,7 +895,7 @@ function main() {
     cm.update(player.position.x, player.position.z);
     // Chunk loading is now handled by a timer, not per-frame
     
-    // Update water physics system
+    // Update water physics system (flow simulation only)
     if (waterPhysics) {
       try {
         waterPhysics.update(frameDelta);
@@ -1164,36 +959,48 @@ function main() {
       moonIntensity = 1;
       ambientRatio = 0.2;
     }
-    // smooth skylight-driven intensity changes using advanced multi-directional sampling
-    const desiredSkyLight = calculateAdvancedLight(
-      player.position.x,
-      player.position.y,
-      player.position.z
-    );
+    
+    if(sunIntensity === 0){
+      scene.background = new THREE.Color(DAY_NIGHT.skyNightColor);
+    }
 
-    // persistent smoothed skylight stored on cm to survive frames
-    if (cm._smoothedSkyLight === undefined) cm._smoothedSkyLight = desiredSkyLight;
-    // smoothing speed (per second)
-    const SKY_SMOOTH_SPEED = 6.0;
-    const skyAlpha = Math.min(1, SKY_SMOOTH_SPEED * frameDelta);
-    cm._smoothedSkyLight += (desiredSkyLight - cm._smoothedSkyLight) * skyAlpha;
-    const smoothedSkyLight = cm._smoothedSkyLight;
+    const timeOfDay = (t / CYCLE_LENGTH);
+    cm.setTimeOfDay(timeOfDay);
+    sunLight.intensity = sunIntensity * 0.8;
+    moonLight.intensity = moonIntensity * 0.15;
+    ambient.intensity = 0.3 + ambientRatio * 0.3;
 
-    // compute target intensities from smoothed skylight
-    const targetSunIntensity = Math.max(0, (smoothedSkyLight / 15) * sunIntensity);
-    const targetMoonIntensity = Math.max(0, 0.25 * (smoothedSkyLight / 15) * moonIntensity);
-    const targetAmbient = 0.1 + 0.75 * (smoothedSkyLight / 15) * ambientRatio;
+    // Update clouds: seamless looping drift (follows player)
+    if (typeof clouds !== 'undefined' && clouds && clouds.group) {
+      // Get cloud dimensions for looping
+      const cloudWidth = clouds.group.userData.width || 2048;
+      const cloudHeight = clouds.group.userData.height || 2048;
+      
+      // Drift speed (blocks per second)
+      const driftSpeedX = 1.5;
+      const driftSpeedZ = 0.4;
+      
+      // Calculate total drift
+      const totalDriftX = (performance.now() / 1000) * driftSpeedX;
+      const totalDriftZ = (performance.now() / 1000) * driftSpeedZ;
+      
+      // Use modulo to create seamless looping drift
+      const driftOffsetX = ((totalDriftX % cloudWidth) + cloudWidth) % cloudWidth;
+      const driftOffsetZ = ((totalDriftZ % cloudHeight) + cloudHeight) % cloudHeight;
 
-    // smoothly apply to actual lights
-    const LIGHT_SMOOTH_SPEED = 8.0;
-    const lightAlpha = Math.min(1, LIGHT_SMOOTH_SPEED * frameDelta);
-    sunLight.intensity += (targetSunIntensity - sunLight.intensity) * lightAlpha;
-    moonLight.intensity += (targetMoonIntensity - moonLight.intensity) * lightAlpha;
-    ambient.intensity += (targetAmbient - ambient.intensity) * lightAlpha;
-
-    // sky color blend (reuse skyColor to avoid allocation)
-    skyColor.copy(skyNight).lerp(skyDay, ambientRatio);
-    scene.background = skyColor;
+      // Snap player position to cloud tile grid (2x2 grid centered around player)
+      const playerTileX = Math.floor((player.position.x - driftOffsetX + cloudWidth) / cloudWidth) * cloudWidth;
+      const playerTileZ = Math.floor((player.position.z - driftOffsetZ + cloudHeight) / cloudHeight) * cloudHeight;
+      
+      // Position clouds: center 2x2 grid around player + drift offset
+      clouds.group.position.x = playerTileX + driftOffsetX - cloudWidth;
+      clouds.group.position.z = playerTileZ + driftOffsetZ - cloudHeight;
+      // Update opacity on all shared materials
+      const newOpacity = 0.4 + ambientRatio * 0.45;
+      if (clouds.materials) {
+        clouds.materials.forEach((mat) => { mat.opacity = newOpacity; });
+      }
+    }
 
     // Always update highlight box and target block every frame
     raycaster.setFromCamera(tempVec2.set(0, 0), camera);
@@ -1250,8 +1057,8 @@ function main() {
       const headY = player.position.y + currentPlayerHeight * CAMERA.eyeHeight;
       const headBlockId = cm.getBlockAtWorld(player.position.x, headY, player.position.z);
 
-      const skyLight = calculateAdvancedLight(player.position.x, player.position.y, player.position.z);
-      const blockLight = (targetInfo && targetInfo.id === 4) ? 5 : 0;
+      // Get per-block light levels from the new lighting system
+      const lightInfo = cm.getLightAtWorld(player.position.x, player.position.y, player.position.z);
 
       // Renderer statistics
       const rinfo = renderer.info || { memory: {}, render: {} };
@@ -1274,7 +1081,7 @@ function main() {
         lookVec,
         facing: { name: facingName, yaw: yawDeg.toFixed(1), pitch: pitchDeg.toFixed(1) },
         headBlockId,
-        clientLight: { sky: skyLight, block: blockLight },
+        clientLight: { sky: lightInfo.skyLight, block: lightInfo.blockLight },
         rendererStats
       });
     }
@@ -1308,7 +1115,7 @@ function main() {
   if (typeof cm.processLoadQueue === 'function') {
     setInterval(() => {
       cm.processLoadQueue();
-    }, 33); // ~30 times per second
+    }, 33);
   }
 }
 

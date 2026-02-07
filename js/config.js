@@ -59,14 +59,16 @@ export const ORES = {
 // ============================================
 
 export const RENDER = {
-  viewDistance: 5,       // chunk render distance (in chunks) - increased thanks to optimizations
-  maxLoadsPerFrame: 1,   // chunks to load per frame (reduced to prevent lag)
+  viewDistance: 6,       // chunk render distance
+  maxLoadsPerFrame: 1,   // chunks to load per frame
   fov: 75,               // camera field of view
   nearClip: 0.1,         // near clipping plane
-  farClip: 2000,         // far clipping plane
-  maxPixelRatio: 1.5,    // max device pixel ratio (performance)
+  farClip: 1000,         // far clipping plane
+  maxPixelRatio: 1.0,    // max device pixel ratio
   showFPS: true,         // show FPS counter on screen
   chunkHysteresis: 0,    // extra chunk margin before unloading
+  enableFrustumCulling: true,  // GPU frustum culling
+  mergeGeometry: true,   // merge chunk geometry for fewer draw calls
 };
 
 // ============================================
@@ -87,8 +89,8 @@ export const PLAYER = {
 // ============================================
 
 export const PHYSICS = {
-  gravity: -31.36,          // blocks/s² (negative = down)
-  jumpSpeed: 9,          // initial jump velocity (blocks/s)
+  gravity: -28.42,          // blocks/s² (negative = down)
+  jumpSpeed: 8.436,          // initial jump velocity (blocks/s)
   terminalVelocity: -50, // max fall speed (blocks/s)
   
   // Movement
@@ -130,8 +132,8 @@ export const DAY_NIGHT = {
   nightLength: 7 * 60,      // night duration (seconds) - 7 minutes
   
   // Sky colors (hex)
-  skyDayColor: 0x87ceeb,    // daytime sky color
-  skyNightColor: 0x001022,  // nighttime sky color
+  skyDayColor: 0x77A8FF,    // daytime sky color
+  skyNightColor: 0x000000,  // nighttime sky color
   
   // Sun/Moon
   sunColor: 0xffee88,

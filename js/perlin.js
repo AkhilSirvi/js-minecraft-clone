@@ -1,18 +1,16 @@
 import { SEED } from './config.js';
 
-function mulberry32(seed) {
-  let a = seed >>> 0;
+function javalcg(seed) {
+  let s = BigInt(seed) & ((1n << 48n) - 1n);
   return function() {
-    a |= 0;
-    a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    s = (s * 25214903917n + 11n) & ((1n << 48n) - 1n);
+    const a = Number(s >> 22n);
+    return a / (1 << 26);
   };
 }
 
 export function createPerlin(seed = SEED) {
-  const rand = mulberry32(seed);
+  const rand = javalcg(seed);
   const p = new Uint8Array(512);
   const perm = new Uint8Array(256);
   for (let i = 0; i < 256; i++) perm[i] = i;
@@ -27,10 +25,24 @@ export function createPerlin(seed = SEED) {
   function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
   function lerp(a, b, t) { return a + t * (b - a); }
   function grad(hash, x, y, z) {
-    const h = hash & 15;
-    const u = h < 8 ? x : y;
-    const v = h < 4 ? y : h === 12 || h === 14 ? x : z;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+  switch (hash & 15) {
+    case 0: return  x + y;
+    case 1: return -x + y;
+    case 2: return  x - y;
+    case 3: return -x - y;
+    case 4: return  x + z;
+    case 5: return -x + z;
+    case 6: return  x - z;
+    case 7: return -x - z;
+    case 8: return  y + z;
+    case 9: return -y + z;
+    case 10: return  y - z;
+    case 11: return -y - z;
+    case 12: return  x + y;
+    case 13: return -x + y;
+    case 14: return -x + y;
+    case 15: return -x - y;
+  }
   }
 
   function noise3(x, y, z) {

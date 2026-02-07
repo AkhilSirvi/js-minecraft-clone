@@ -5,6 +5,7 @@
 import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
 import { SEED, RENDER, TREES, DEBUG, COLORS } from './config.js';
 import * as THREE from './three.module.js';
+import { calculateChunkLighting, lightToRenderBrightness } from './lighting.js';
 
 // Block IDs
 const BLOCK_AIR = 0;
@@ -65,9 +66,17 @@ export default class ChunkManager {
     this.seed = options.seed ?? SEED;
     this.blockSize = options.blockSize ?? 1;
     this.viewDistance = options.viewDistance ?? RENDER.viewDistance;
-    this.chunks = new Map(); // key -> { cx, cz, meshes, top, data }
+    this.chunks = new Map(); // key -> { cx, cz, meshes, top, data, skyLight, blockLight, builtAtTime }
     this.showBorders = false;
     this._borderHelpers = new Map(); // key -> Box3Helper
+    this._timeOfDay = 0.5; // Default to noon (0=midnight, 0.5=noon, 1=midnight)
+    this._cycleStart = performance.now() / 1000; // For time tracking
+    this._debugLightLogged = false; // Debug flag to limit logging
+    this._warnedMissingLight = false; // Warning flag for missing lighting arrays
+    this._lightingRebuildQueue = []; // Queue of chunk keys that need lighting rebuild
+    this._lightingRebuildThreshold = 0.05; // Rebuild when time changes by this amount 
+    this._maxLightingRebuildsPerFrame = 2; // Limit rebuilds per frame
+    this._lastLightingRebuildTime = 0.5; // Track when we last queued a full rebuild
     if (DEBUG.logChunkLoading) console.log(`ChunkManager: init (seed=${this.seed}, blockSize=${this.blockSize}, viewDistance=${this.viewDistance})`);
     this.materials = this._createMaterials();
     // async load queue to avoid blocking the main thread
@@ -139,6 +148,7 @@ export default class ChunkManager {
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.magFilter = THREE.NearestFilter;
       tex.minFilter = THREE.NearestFilter;
+      tex.generateMipmaps = false;
       return tex;
     };
 
@@ -169,17 +179,17 @@ export default class ChunkManager {
       roseBush: 'assets/textures/block/rose_bush_top.png',
       sunflower: 'assets/textures/block/sunflower.png',
       oakLeaves: 'assets/textures/block/oak_leaves.png',
-      waterStill: 'assets/textures/block/water_still.png'
+      waterStill: 'assets/textures/block/water_overlay.png'
     };
 
     const T = {};
     for (const [k, p] of Object.entries(texturePaths)) T[k] = loadTex(p);
 
-    // Material factory helpers
-    const mat = (opts) => new THREE.MeshLambertMaterial(opts);
-    const withMap = (key, opts = {}) => mat(Object.assign({ map: T[key] }, opts));
+    // Material factory helpers - all materials use vertex colors for per-face lighting
+    const mat = (opts) => new THREE.MeshLambertMaterial({ vertexColors: true, ...opts });
+    const withMap = (key, opts = {}) => mat({ map: T[key], ...opts });
 
-    // Create materials concisely
+    // Create materials concisely (all with vertexColors enabled for lighting)
     const stoneMat = withMap('stone');
     const dirtMat = withMap('dirt');
     const waterMat = mat({ map: T.waterStill, transparent: true, opacity: 0.6, side: THREE.DoubleSide });
@@ -277,6 +287,76 @@ export default class ChunkManager {
            blockId === BLOCK_ICE || CROSS_BLOCKS.has(blockId);
   }
 
+  // Get light at local chunk coords, or from neighbor chunk
+  // Returns { sky, block } light levels (0-15)
+  _getLight(cx, cz, lx, ly, lz, skyLight, blockLight) {
+    // Check Y bounds first
+    if (ly < MIN_Y || ly > MIN_Y + HEIGHT - 1) {
+      // Above world = full sky light, below = no light
+      return { sky: ly > MAX_Y ? 15 : 0, block: 0 };
+    }
+    
+    // Check if within this chunk
+    if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      const idx = (lx * CHUNK_SIZE + lz) * HEIGHT + (ly - MIN_Y);
+      return {
+        sky: skyLight ? (skyLight[idx] || 0) : 15,
+        block: blockLight ? (blockLight[idx] || 0) : 0
+      };
+    }
+    
+    // Need to look up from neighbor chunk
+    const globalX = cx * CHUNK_SIZE + lx;
+    const globalZ = cz * CHUNK_SIZE + lz;
+    const neighborCX = Math.floor(globalX / CHUNK_SIZE);
+    const neighborCZ = Math.floor(globalZ / CHUNK_SIZE);
+    const localNX = ((globalX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localNZ = ((globalZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    
+    const neighbor = this.chunks.get(this._key(neighborCX, neighborCZ));
+    if (!neighbor || !neighbor.skyLight || !neighbor.blockLight) {
+      // Neighbor not loaded or missing light data - assume full brightness
+      return { sky: 15, block: 0 };
+    }
+    
+    const idx = (localNX * CHUNK_SIZE + localNZ) * HEIGHT + (ly - MIN_Y);
+    return {
+      sky: neighbor.skyLight[idx] || 0,
+      block: neighbor.blockLight[idx] || 0
+    };
+  }
+
+  // Get combined face light level considering time of day and neighbor chunks
+  _getFaceLight(cx, cz, lx, ly, lz, faceIdx, skyLight, blockLight) {
+    // Face directions: +X, -X, +Y, -Y, +Z, -Z
+    const faceNormals = [
+      [1, 0, 0], [-1, 0, 0],
+      [0, 1, 0], [0, -1, 0],
+      [0, 0, 1], [0, 0, -1]
+    ];
+    
+    const [dx, dy, dz] = faceNormals[faceIdx];
+    const adjX = lx + dx;
+    const adjY = ly + dy;
+    const adjZ = lz + dz;
+    
+    const { sky, block } = this._getLight(cx, cz, adjX, adjY, adjZ, skyLight, blockLight);
+    
+    // Apply time-of-day modifier to sky light
+    const dayBrightness = this._getDayBrightness(this._timeOfDay);
+    const effectiveSky = Math.floor(sky * dayBrightness);
+    
+    return Math.max(effectiveSky, block);
+  }
+
+  // Get brightness multiplier based on time of day (0.25 to 1.0)
+  _getDayBrightness(timeOfDay) {
+    const t = timeOfDay % 1;
+    const angle = (t - 0.25) * Math.PI * 2;
+    const raw = (Math.sin(angle) + 1) / 2;
+    return 0.25 + raw * 0.75;
+  }
+
   _loadChunk(cx, cz) {
     // Legacy synchronous load (fallback). Prefer worker pipeline.
     const chunk = generateChunk(cx, cz, this.seed);
@@ -307,8 +387,11 @@ export default class ChunkManager {
       }
     }
 
-    // Build optimized mesh with face culling
-    const meshes = this._buildChunkMesh(chunk, cx, cz, top);
+    // Calculate per-block lighting
+    const { skyLight, blockLight } = calculateChunkLighting(chunk.data, cx, cz, null);
+
+    // Build optimized mesh with face culling and per-face lighting
+    const meshes = this._buildChunkMesh(chunk, cx, cz, top, skyLight, blockLight);
     const group = new THREE.Group();
     for (const mesh of meshes) group.add(mesh);
 
@@ -319,7 +402,7 @@ export default class ChunkManager {
 
     this.scene.add(group);
     const key = this._key(cx, cz);
-    this.chunks.set(key, { cx, cz, group, top, data: chunk.data });
+    this.chunks.set(key, { cx, cz, group, top, data: chunk.data, skyLight, blockLight, builtAtTime: this._timeOfDay });
     if (this.showBorders) {
       try {
         const box = new THREE.Box3(
@@ -337,16 +420,18 @@ export default class ChunkManager {
 
   _addTrees(chunk, cx, cz) {
     // Deterministic RNG per chunk
-    const mulberry32 = (a) => {
+    const javalcg = (a) => {
       return function() {
-        a |= 0; a = a + 0x6D2B79F5 | 0;
-        let t = Math.imul(a ^ a >>> 15, 1 | a);
-        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        let s = BigInt(seed) & ((1n << 48n) - 1n);
+        return function() {
+          s = (s * 25214903917n + 11n) & ((1n << 48n) - 1n);
+          const a = Number(s >> 22n);
+          return a / (1 << 26);
+        };
       };
     };
     const seedMix = (this.seed ^ ((cx * 73856093) >>> 0) ^ ((cz * 19349663) >>> 0)) >>> 0;
-    const rng = mulberry32(seedMix);
+    const rng = javalcg(seedMix);
 
     // Find grass tops and place trees
     for (let x = 0; x < CHUNK_SIZE; x++) {
@@ -390,7 +475,7 @@ export default class ChunkManager {
     }
   }
 
-  _buildChunkMesh(chunk, cx, cz, top) {
+  _buildChunkMesh(chunk, cx, cz, top, skyLight = null, blockLight = null) {
     const bs = this.blockSize;
     // Build geometry using local chunk-space coordinates (0..CHUNK_SIZE*bs)
     // and let the caller position the returned group at the chunk world origin.
@@ -511,11 +596,16 @@ export default class ChunkManager {
               uvRot = this._rotFromSeed(globalBlockX, globalBlockY, globalBlockZ);
             }
 
+            // Calculate light level for this face (from adjacent block in face direction)
+            // Uses _getFaceLight which handles cross-chunk lookups for proper border lighting
+            let faceLight = this._getFaceLight(cx, cz, x, y, z, faceIdx, skyLight, blockLight);
+
             faceLists[matKey].push({
               x: worldX, y: worldY, z: worldZ,
               corners: corners,
               faceIdx: faceIdx,
-              uvRot: uvRot
+              uvRot: uvRot,
+              light: faceLight
             });
 
             // Add overlay face for grass sides (colored overlay on top of base)
@@ -525,7 +615,8 @@ export default class ChunkManager {
                 x: worldX, y: worldY, z: worldZ,
                 corners: corners,
                 faceIdx: faceIdx,
-                uvRot: uvRot
+                uvRot: uvRot,
+                light: faceLight
               });
             }
           }
@@ -556,6 +647,11 @@ export default class ChunkManager {
           const worldY = y * bs;
           const worldZ = z * bs;
 
+          // Get light level for this plant (use the light at this position)
+          const { sky, block } = this._getLight(cx, cz, x, y, z, skyLight, blockLight);
+          const dayBrightness = this._getDayBrightness(this._timeOfDay);
+          const plantLight = Math.max(Math.floor(sky * dayBrightness), block);
+
           let matKey;
           switch (blockId) {
             case BLOCK_DEAD_BUSH: matKey = 'deadBush'; break;
@@ -565,7 +661,7 @@ export default class ChunkManager {
           }
           
           if (matKey && crossBlocks[matKey]) {
-            crossBlocks[matKey].push({ x: worldX, y: worldY, z: worldZ });
+            crossBlocks[matKey].push({ x: worldX, y: worldY, z: worldZ, light: plantLight });
           }
         }
       }
@@ -579,6 +675,7 @@ export default class ChunkManager {
       const positions = [];
       const normals = [];
       const uvs = [];
+      const colors = []; // Vertex colors for per-face lighting
       const indices = [];
 
       let vertexOffset = 0;
@@ -587,6 +684,10 @@ export default class ChunkManager {
         const faceData = FACE_DIRS[face.faceIdx];
         const dir = faceData.dir;
         const faceUVs = faceData.uvs;
+        
+        // Calculate brightness from light level
+        const lightLevel = face.light !== undefined ? face.light : 15;
+        const brightness = lightToRenderBrightness(lightLevel);
 
         // Add 4 vertices for this face
         for (let i = 0; i < 4; i++) {
@@ -600,6 +701,8 @@ export default class ChunkManager {
           const rot = face.uvRot || 0;
           const [ru, rv] = this._rotateUVPair(faceUVs[i][0], faceUVs[i][1], rot);
           uvs.push(ru, rv);
+          // Add vertex color (grayscale for lighting)
+          colors.push(brightness, brightness, brightness);
         }
 
         // Add 2 triangles (6 indices)
@@ -615,6 +718,7 @@ export default class ChunkManager {
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
       geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       geometry.setIndex(indices);
 
       // Get material
@@ -647,6 +751,8 @@ export default class ChunkManager {
 
       const mesh = new THREE.Mesh(geometry, material);
       mesh.frustumCulled = true;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
       meshes.push(mesh);
     }
 
@@ -657,6 +763,7 @@ export default class ChunkManager {
       const positions = [];
       const normals = [];
       const uvs = [];
+      const colors = []; // Vertex colors for lighting
       const indices = [];
 
       let vertexOffset = 0;
@@ -665,6 +772,10 @@ export default class ChunkManager {
         const cy = block.y;
         const cz = block.z + bs * 0.5;
         const halfSize = bs * 0.45;
+        
+        // Calculate brightness from light level
+        const lightLevel = block.light !== undefined ? block.light : 15;
+        const brightness = lightToRenderBrightness(lightLevel);
 
         // Two diagonal quads forming an X shape
         const quads = [
@@ -691,6 +802,11 @@ export default class ChunkManager {
           normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
           // UVs
           uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+          // Vertex colors for lighting (4 vertices per quad)
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
           // Indices
           indices.push(
             vertexOffset, vertexOffset + 1, vertexOffset + 2,
@@ -704,12 +820,15 @@ export default class ChunkManager {
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
       geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
       geometry.setIndex(indices);
 
       const material = this.materials[matKey];
       if (material) {
         const mesh = new THREE.Mesh(geometry, material);
         mesh.frustumCulled = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
         meshes.push(mesh);
       } else {
         geometry.dispose();
@@ -771,7 +890,13 @@ export default class ChunkManager {
             // Avoid duplicate pending requests
             if (!this._pendingRequests.has(key)) {
               this._pendingRequests.set(key, item);
-              this._chunkWorker.postMessage({ cx: item.cx, cz: item.cz, seed: this.seed, opts: {} });
+              this._chunkWorker.postMessage({ 
+                cx: item.cx, 
+                cz: item.cz, 
+                seed: this.seed, 
+                opts: {},
+                priority: item.priority 
+              });
             }
           } else {
             // Fallback to synchronous generation
@@ -1031,9 +1156,14 @@ export default class ChunkManager {
       }
     }
 
-    // Build new meshes based on current data and top
+    // Recalculate lighting
+    const { skyLight, blockLight } = calculateChunkLighting(rec.data, cx, cz, null);
+    rec.skyLight = skyLight;
+    rec.blockLight = blockLight;
+
+    // Build new meshes based on current data and top with lighting
     const chunkLike = { data: rec.data };
-    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top);
+    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top, skyLight, blockLight);
     const newGroup = new THREE.Group();
     for (const mesh of meshes) newGroup.add(mesh);
     const chunkWorldX = cx * CHUNK_SIZE * bs;
@@ -1042,6 +1172,7 @@ export default class ChunkManager {
 
     this.scene.add(newGroup);
     rec.group = newGroup;
+    rec.builtAtTime = this._timeOfDay;
     // Recreate border helper for rebuilt chunk if enabled
     const oldHelper = this._borderHelpers.get(key);
     if (oldHelper) {
@@ -1096,4 +1227,144 @@ export default class ChunkManager {
   }
 
   toggleChunkBorders() { this.showChunkBorders(!this.showBorders); }
+
+  // Update time of day (0-1 where 0=midnight, 0.5=noon, 1=midnight)
+  // This affects sky light brightness but not block light
+  setTimeOfDay(time) {
+    const newTime = time % 1;
+    this._timeOfDay = newTime;
+    
+    // Check if time changed significantly since last full rebuild
+    // Calculate circular distance (handles wraparound at 0/1)
+    const timeDiff = Math.min(
+      Math.abs(newTime - this._lastLightingRebuildTime),
+      1 - Math.abs(newTime - this._lastLightingRebuildTime)
+    );
+    
+    if (timeDiff >= this._lightingRebuildThreshold) {
+      this._queueAllChunksForLightingRebuild();
+      this._lastLightingRebuildTime = newTime;
+    }
+    
+    // Process pending lighting rebuilds (a few per frame)
+    this._processLightingRebuildQueue();
+  }
+  
+  // Queue all loaded chunks for lighting rebuild
+  _queueAllChunksForLightingRebuild() {
+    for (const [key, rec] of this.chunks) {
+      // Only queue if not already queued
+      if (!this._lightingRebuildQueue.includes(key)) {
+        this._lightingRebuildQueue.push(key);
+      }
+    }
+  }
+  
+  // Process a limited number of chunk lighting rebuilds per frame
+  _processLightingRebuildQueue() {
+    let rebuiltCount = 0;
+    while (this._lightingRebuildQueue.length > 0 && rebuiltCount < this._maxLightingRebuildsPerFrame) {
+      const key = this._lightingRebuildQueue.shift();
+      const rec = this.chunks.get(key);
+      if (rec) {
+        // Use mesh-only rebuild for time-of-day updates (no lighting recalculation needed)
+        this._rebuildChunkMeshOnly(rec.cx, rec.cz);
+        rebuiltCount++;
+      }
+    }
+  }
+  
+  // Rebuild chunk mesh only (for time-of-day updates) - reuses existing lighting data
+  _rebuildChunkMeshOnly(cx, cz) {
+    const key = this._key(cx, cz);
+    const rec = this.chunks.get(key);
+    if (!rec) return;
+    const bs = this.blockSize;
+
+    // Dispose old geometries and remove from scene
+    if (rec.group) {
+      while (rec.group.children.length > 0) {
+        const child = rec.group.children[0];
+        rec.group.remove(child);
+        if (child.isMesh && child.geometry) {
+          child.geometry.dispose();
+        }
+      }
+      this.scene.remove(rec.group);
+      rec.group = null;
+    }
+
+    // Build new meshes using existing lighting data (no recalculation)
+    const chunkLike = { data: rec.data };
+    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top, rec.skyLight, rec.blockLight);
+    const newGroup = new THREE.Group();
+    for (const mesh of meshes) newGroup.add(mesh);
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    newGroup.position.set(chunkWorldX, 0, chunkWorldZ);
+
+    this.scene.add(newGroup);
+    rec.group = newGroup;
+    rec.builtAtTime = this._timeOfDay;
+
+    // Recreate border helper if enabled
+    const oldHelper = this._borderHelpers.get(key);
+    if (oldHelper) {
+      this.scene.remove(oldHelper);
+      if (oldHelper.geometry) oldHelper.geometry.dispose();
+      if (oldHelper.material) oldHelper.material.dispose();
+      this._borderHelpers.delete(key);
+    }
+    if (this.showBorders) {
+      try {
+        const box = new THREE.Box3(
+          new THREE.Vector3(chunkWorldX, MIN_Y * bs, chunkWorldZ),
+          new THREE.Vector3(chunkWorldX + CHUNK_SIZE * bs, MAX_Y * bs, chunkWorldZ + CHUNK_SIZE * bs)
+        );
+        const helper = new THREE.Box3Helper(box, 0xff0000);
+        this.scene.add(helper);
+        this._borderHelpers.set(key, helper);
+      } catch (e) {
+        console.warn('Failed to create Box3Helper for chunk borders', e);
+      }
+    }
+  }
+
+  // Get current time of day
+  getTimeOfDay() {
+    return this._timeOfDay;
+  }
+
+  // Get light levels at a world position
+  // Returns { skyLight, blockLight, combined } all 0-15
+  getLightAtWorld(worldX, worldY, worldZ) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const gyBlock = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    
+    const recKey = this._key(cx, cz);
+    const rec = this.chunks.get(recKey);
+    
+    if (!rec || !rec.skyLight || !rec.blockLight) {
+      return { skyLight: 15, blockLight: 0, combined: 15 };
+    }
+    
+    const y = gyBlock;
+    if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) {
+      return { skyLight: 15, blockLight: 0, combined: 15 };
+    }
+    
+    const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
+    const sky = rec.skyLight[idx] || 0;
+    const block = rec.blockLight[idx] || 0;
+    const dayBrightness = this._getDayBrightness(this._timeOfDay);
+    const combined = Math.max(Math.floor(sky * dayBrightness), block);
+    
+    return { skyLight: sky, blockLight: block, combined };
+  }
 }
