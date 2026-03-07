@@ -1,0 +1,1694 @@
+// chunkManager.js
+// Manage procedural chunk generation and streaming around a center position.
+// OPTIMIZED: Uses merged BufferGeometry with face culling for minimal draw calls.
+
+import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
+import { SEED, RENDER, TREES, DEBUG, COLORS } from './config.js';
+import * as THREE from './three.module.js';
+import { calculateChunkLighting, lightToRenderBrightness } from './lighting.js';
+
+// Block IDs
+const BLOCK_AIR = 0;
+const BLOCK_STONE = 1;
+const BLOCK_DIRT = 2;
+const BLOCK_GRASS = 3;
+const BLOCK_WATER = 4;
+const BLOCK_SAND = 5;
+const BLOCK_WOOD = 6;
+const BLOCK_LEAVES = 7;
+const BLOCK_GRASS_SNOW = 8;
+const BLOCK_GRAVEL = 9;
+const BLOCK_COAL_ORE = 10;
+const BLOCK_IRON_ORE = 11;
+const BLOCK_GOLD_ORE = 12;
+const BLOCK_DIAMOND_ORE = 13;
+const BLOCK_BEDROCK = 14;
+const BLOCK_CLAY = 15;
+const BLOCK_RED_SAND = 16;
+const BLOCK_SNOW = 17;
+const BLOCK_ICE = 18;
+const BLOCK_CACTUS = 19;
+const BLOCK_DEAD_BUSH = 20;
+const BLOCK_TALL_GRASS = 21;
+const BLOCK_ROSE_BUSH = 22;
+const BLOCK_SUNFLOWER = 23;
+
+// Cross-model blocks (rendered as X-shaped billboards)
+const CROSS_BLOCKS = new Set([BLOCK_DEAD_BUSH, BLOCK_TALL_GRASS, BLOCK_ROSE_BUSH, BLOCK_SUNFLOWER]);
+
+// Passable blocks - no collision (vegetation, water, etc.)
+const PASSABLE_BLOCKS = new Set([
+  BLOCK_AIR, BLOCK_WATER, BLOCK_DEAD_BUSH, BLOCK_TALL_GRASS, 
+  BLOCK_ROSE_BUSH, BLOCK_SUNFLOWER, BLOCK_SNOW
+]);
+
+// Check if a block is passable (no collision)
+export function isBlockPassable(blockId) {
+  return PASSABLE_BLOCKS.has(blockId);
+}
+
+// Face directions: +X, -X, +Y, -Y, +Z, -Z
+// Corners ordered so (v1-v0) × (v2-v0) = face normal direction
+// Triangle indices (0,1,2) and (0,2,3) form the quad
+// UVs are per-face to ensure textures are oriented correctly
+const FACE_DIRS = [
+  { dir: [1, 0, 0], corners: [[1,0,0], [1,1,0], [1,1,1], [1,0,1]], uvs: [[0,0], [0,1], [1,1], [1,0]] },   // +X
+  { dir: [-1, 0, 0], corners: [[0,0,0], [0,0,1], [0,1,1], [0,1,0]], uvs: [[1,0], [0,0], [0,1], [1,1]] },  // -X
+  { dir: [0, 1, 0], corners: [[0,1,0], [0,1,1], [1,1,1], [1,1,0]], uvs: [[0,0], [0,1], [1,1], [1,0]] },   // +Y (top)
+  { dir: [0, -1, 0], corners: [[0,0,0], [1,0,0], [1,0,1], [0,0,1]], uvs: [[0,0], [1,0], [1,1], [0,1]] },  // -Y (bottom)
+  { dir: [0, 0, 1], corners: [[0,0,1], [1,0,1], [1,1,1], [0,1,1]], uvs: [[0,0], [1,0], [1,1], [0,1]] },   // +Z
+  { dir: [0, 0, -1], corners: [[0,0,0], [0,1,0], [1,1,0], [1,0,0]], uvs: [[1,0], [1,1], [0,1], [0,0]] }   // -Z
+];
+
+export default class ChunkManager {
+  constructor(scene, options = {}) {
+    this.scene = scene;
+    this.seed = options.seed ?? SEED;
+    this.blockSize = options.blockSize ?? 1;
+    this.viewDistance = options.viewDistance ?? RENDER.viewDistance;
+    this.chunks = new Map(); // key -> { cx, cz, meshes, top, data, skyLight, blockLight, builtAtTime }
+    this.showBorders = false;
+    this._borderHelpers = new Map(); // key -> Box3Helper
+    this._playerChunkX = null; // Current player chunk X
+    this._playerChunkZ = null; // Current player chunk Z
+    this._playerBorderHelper = null; // Border helper for player chunk
+    this._subGridHelpers = []; // Array of sub-grid helpers
+    this._timeOfDay = 0.5; // Default to noon (0=midnight, 0.5=noon, 1=midnight)
+    this._cycleStart = performance.now() / 1000; // For time tracking
+    this._debugLightLogged = false; // Debug flag to limit logging
+    this._warnedMissingLight = false; // Warning flag for missing lighting arrays
+    this._lightingRebuildQueue = []; // Queue of chunk keys that need lighting rebuild
+    this._lightingRebuildThreshold = 0.05; // Rebuild when time changes by this amount 
+    this._maxLightingRebuildsPerFrame = 2; // Limit rebuilds per frame
+    this._lastLightingRebuildTime = 0.5; // Track when we last queued a full rebuild
+    if (DEBUG.logChunkLoading) {
+      const initMsg = `ChunkManager: init (seed=${this.seed}, blockSize=${this.blockSize}, viewDistance=${this.viewDistance})`;
+      console.log(initMsg);
+    }
+    this._debugOverlay = options.debugOverlay ?? null;
+    if (this._debugOverlay && DEBUG.logChunkLoading) this._debugOverlay.pushMessage(`ChunkManager init — view=${this.viewDistance}`, { duration: 2500 });
+    this.materials = this._createMaterials();
+    // async load queue to avoid blocking the main thread
+    this._loadQueue = [];
+    this._isProcessingQueue = false;
+    this.maxLoadsPerFrame = options.maxLoadsPerFrame ?? RENDER.maxLoadsPerFrame;
+    // Finalization queue to spread expensive main-thread work across frames
+    this._finalizationQueue = [];
+    this._maxFinalizationsPerFrame = 2; // Limit finalizations to avoid lag spikes
+    // Unload queue to spread chunk disposal across frames
+    this._unloadQueue = [];
+    this._maxUnloadsPerFrame = 3; // Limit unloads per frame to avoid lag spikes
+    // Worker for chunk generation to avoid main-thread spikes
+    try {
+      this._chunkWorker = new Worker('js/chunkWorker.js', { type: 'module' });
+      this._pendingRequests = new Map(); // key -> { key, cx, cz, priority }
+      this._chunkWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg && msg.error) {
+          console.warn('Chunk worker error:', msg.error);
+          return;
+        }
+        const key = this._key(msg.cx, msg.cz);
+        const pending = this._pendingRequests.get(key);
+        this._pendingRequests.delete(key);
+        if (!pending) return; // no longer needed
+
+        // Check if chunk is still within view distance BEFORE doing expensive finalization
+        if (this._playerChunkX !== null && this._playerChunkZ !== null) {
+          const dx = msg.cx - this._playerChunkX;
+          const dz = msg.cz - this._playerChunkZ;
+          const distanceSquared = dx * dx + dz * dz;
+          const maxDistanceSquared = this.viewDistance * this.viewDistance;
+          
+          if (distanceSquared > maxDistanceSquared) {
+            return; // Skip finalization entirely - save all the work!
+          }
+        }
+
+        // Reconstruct typed arrays from transferred buffers
+        const chunk = { data: null, heightMap: null, biomeMap: null };
+        if (msg.data) chunk.data = new Uint8Array(msg.data);
+        if (msg.heightMap) chunk.heightMap = new Int16Array(msg.heightMap);
+        if (msg.biomeMap) chunk.biomeMap = new Uint8Array(msg.biomeMap);
+
+        // Queue for finalization instead of immediate processing to avoid lag spikes
+        this._finalizationQueue.push({ chunk, cx: pending.cx, cz: pending.cz, meta: pending });
+      };
+    } catch (e) {
+      // Worker not supported or failed to construct — fall back to main-thread generation
+      this._chunkWorker = null;
+      this._pendingRequests = new Map();
+    }
+  }
+
+  // Compute a deterministic 0..3 rotation for a block at global block coords
+  _rotFromSeed(gx, gy, gz) {
+    // Mix seed and coordinates into a 32-bit hash, then take lowest 2 bits
+    let h = (this.seed >>> 0);
+    h = (h ^ ((gx * 374761393) >>> 0)) >>> 0;
+    h = (h ^ ((gz * 668265263) >>> 0)) >>> 0;
+    h = (h ^ ((gy * 2139062143) >>> 0)) >>> 0;
+    h = (h ^ (h >>> 13)) >>> 0;
+    h = Math.imul(h, 0x85ebca6b) >>> 0;
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h & 3; // 0..3
+  }
+
+  // Rotate a single UV pair (u,v) by 90deg clockwise `rot` times around texture center
+  _rotateUVPair(u, v, rot) {
+    let ru = u, rv = v;
+    for (let i = 0; i < rot; i++) {
+      const nu = rv;
+      const nv = 1 - ru;
+      ru = nu; rv = nv;
+    }
+    return [ru, rv];
+  }
+
+  _createMaterials() {
+    const loader = new THREE.TextureLoader();
+    const nearest = THREE.NearestFilter;
+
+    // Helper to load and configure texture
+    const loadTex = (path) => {
+      const tex = loader.load(path);
+      tex.generateMipmaps = true;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.NearestMipmapLinearFilter;
+      tex.magFilter = THREE.NearestFilter;
+      return tex;
+    };
+
+    // Texture path map (reuse dirt for missing plant assets)
+    const texturePaths = {
+      dirt: 'assets/textures/block/dirt.png',
+      sand: 'assets/textures/block/sand.png',
+      grassSide: 'assets/textures/block/grass_block_side.png',
+      grassSideOverlay: 'assets/textures/block/grass_block_side_overlay.png',
+      grassTop: 'assets/textures/block/grass_block_top.png',
+      stone: 'assets/textures/block/stone.png',
+      gravel: 'assets/textures/block/gravel.png',
+      clay: 'assets/textures/block/clay.png',
+      redSand: 'assets/textures/block/red_sand.png',
+      bedrock: 'assets/textures/block/bedrock.png',
+      snow: 'assets/textures/block/snow.png',
+      ice: 'assets/textures/block/ice.png',
+      coalOre: 'assets/textures/block/coal_ore.png',
+      ironOre: 'assets/textures/block/iron_ore.png',
+      goldOre: 'assets/textures/block/gold_ore.png',
+      diamondOre: 'assets/textures/block/diamond_ore.png',
+      oakSide: 'assets/textures/block/oak_log.png',
+      oakTop: 'assets/textures/block/oak_log_top.png',
+      cactus: 'assets/textures/block/cactus.png',
+      grassSnowSide: 'assets/textures/block/grass_block_snow_side.png',
+      deadBush: 'assets/textures/block/dead_bush.png',
+      tallGrass: 'assets/textures/block/tall_grass_top.png',
+      roseBush: 'assets/textures/block/rose_bush_top.png',
+      sunflower: 'assets/textures/block/sunflower.png',
+      oakLeaves: 'assets/textures/block/oak_leaves.png',
+      waterStill: 'assets/textures/block/water_overlay.png',
+      sun: 'assets/textures/environment/sun.png',
+      moonPhases: 'assets/textures/environment/moon_phases.png',
+      playerskin: 'assets/entity/player/steve.png'
+    };
+
+    const T = {};
+    for (const [k, p] of Object.entries(texturePaths)) T[k] = loadTex(p);
+
+    // Material factory helpers - all materials use vertex colors for per-face lighting
+    const mat = (opts) => new THREE.MeshLambertMaterial({ vertexColors: true, ...opts });
+    const withMap = (key, opts = {}) => mat({ map: T[key], ...opts });
+
+    // Create materials concisely (all with vertexColors enabled for lighting)
+    const playerskinMat = withMap('playerskin')
+    const sunMat = mat({ map: T.sun, transparent: true, alphaTest: 0.1});
+    const moonPhasesMat = mat({ map: T.moonPhases, transparent: true, alphaTest: 0.1});
+    const stoneMat = withMap('stone');
+    const dirtMat = withMap('dirt');
+    const waterMat = mat({ map: T.waterStill, transparent: true, opacity: 0.6, side: THREE.DoubleSide });
+    const sandMat = withMap('sand');
+    const gravelMat = withMap('gravel');
+    const clayMat = withMap('clay');
+    const redSandMat = withMap('redSand');
+    const bedrockMat = withMap('bedrock');
+    const snowMat = withMap('snow');
+    const iceMat = mat({ map: T.ice, transparent: true, opacity: 0.9, side: THREE.DoubleSide });
+
+    const coalOreMat = withMap('coalOre');
+    const ironOreMat = withMap('ironOre');
+    const goldOreMat = withMap('goldOre');
+    const diamondOreMat = withMap('diamondOre');
+
+    const woodSideMat = withMap('oakSide');
+    const woodTopMat = withMap('oakTop');
+
+    const cactusMat = mat({ map: T.cactus, color: COLORS.cactus });
+
+    // Grass side: base texture (dirt+gray grass) + overlay with color tint
+    const grassSideBaseMat = withMap('grassSide'); // Base texture without tint
+    const grassSideOverlayMat = mat({ map: T.grassSideOverlay, color: COLORS.grassSide, transparent: true, depthWrite: false });
+    const grassTopMat = mat({ map: T.grassTop, color: COLORS.grassTop });
+    const grassBottomMat = dirtMat;
+
+    const grassSnowSideMat = withMap('grassSnowSide');
+    const grassSnowTopMat = withMap('snow');
+
+    const leavesMat = mat({ map: T.oakLeaves, transparent: false, alphaTest: 0.5, color: COLORS.leaves});
+
+    const deadBushMat = mat({ map: T.deadBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const tallGrassMat = mat({ map: T.tallGrass, color: COLORS.tallGrass, transparent: false, alphaTest: 0.5, side: THREE.DoubleSide });
+    const roseBushMat = mat({ map: T.roseBush, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    const sunflowerMat = mat({ map: T.sunflower, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+
+    return {
+      playerskin: playerskinMat,
+      sun: sunMat,
+      moonPhases: moonPhasesMat,
+      stone: stoneMat,
+      dirt: dirtMat,
+      sand: sandMat,
+      water: waterMat,
+      leaves: leavesMat,
+      gravel: gravelMat,
+      clay: clayMat,
+      redSand: redSandMat,
+      bedrock: bedrockMat,
+      snow: snowMat,
+      ice: iceMat,
+      coalOre: coalOreMat,
+      ironOre: ironOreMat,
+      goldOre: goldOreMat,
+      diamondOre: diamondOreMat,
+      // Cross-model plants
+      deadBush: deadBushMat,
+      tallGrass: tallGrassMat,
+      roseBush: roseBushMat,
+      sunflower: sunflowerMat,
+      // Per-face materials for grass, snowy grass, wood, and cactus
+      grass: [grassSideBaseMat, grassSideBaseMat, grassTopMat, grassBottomMat, grassSideBaseMat, grassSideBaseMat],
+      grassOverlay: [grassSideOverlayMat, grassSideOverlayMat, null, null, grassSideOverlayMat, grassSideOverlayMat], // Overlay for sides only
+      grassSnow: [grassSnowSideMat, grassSnowSideMat, grassSnowTopMat, grassBottomMat, grassSnowSideMat, grassSnowSideMat],
+      wood: [woodSideMat, woodSideMat, woodTopMat, woodTopMat, woodSideMat, woodSideMat],
+      cactus: [cactusMat, cactusMat, cactusMat, cactusMat, cactusMat, cactusMat]
+    };
+  }
+
+  _key(cx, cz) { return `${cx},${cz}`; }
+
+  // Get block at local chunk coords, or from neighbor chunk
+  _getBlock(chunkData, cx, cz, lx, ly, lz) {
+    // Check bounds within this chunk
+    if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      if (ly < MIN_Y || ly > MIN_Y + HEIGHT - 1) return BLOCK_AIR;
+      const idx = (lx * CHUNK_SIZE + lz) * HEIGHT + (ly - MIN_Y);
+      return chunkData[idx];
+    }
+    // Check neighbor chunk if loaded
+    const globalX = cx * CHUNK_SIZE + lx;
+    const globalZ = cz * CHUNK_SIZE + lz;
+    const neighborCX = Math.floor(globalX / CHUNK_SIZE);
+    const neighborCZ = Math.floor(globalZ / CHUNK_SIZE);
+    const localNX = ((globalX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localNZ = ((globalZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const neighbor = this.chunks.get(this._key(neighborCX, neighborCZ));
+    if (!neighbor) return BLOCK_AIR; // Assume air if neighbor not loaded
+    if (ly < MIN_Y || ly > MIN_Y + HEIGHT - 1) return BLOCK_AIR;
+    const idx = (localNX * CHUNK_SIZE + localNZ) * HEIGHT + (ly - MIN_Y);
+    return neighbor.data[idx];
+  }
+
+  // Check if a block type is transparent (air, water, leaves, ice, or cross-model plants)
+  _isTransparent(blockId) {
+    return blockId === BLOCK_AIR || blockId === BLOCK_WATER || blockId === BLOCK_LEAVES || 
+           blockId === BLOCK_ICE || CROSS_BLOCKS.has(blockId);
+  }
+
+  // Get light at local chunk coords, or from neighbor chunk
+  // Returns { sky, block } light levels (0-15)
+  _getLight(cx, cz, lx, ly, lz, skyLight, blockLight) {
+    // Check Y bounds first
+    if (ly < MIN_Y || ly > MIN_Y + HEIGHT - 1) {
+      // Above world = full sky light, below = no light
+      return { sky: ly > MAX_Y ? 15 : 0, block: 0 };
+    }
+    
+    // Check if within this chunk
+    if (lx >= 0 && lx < CHUNK_SIZE && lz >= 0 && lz < CHUNK_SIZE) {
+      const idx = (lx * CHUNK_SIZE + lz) * HEIGHT + (ly - MIN_Y);
+      return {
+        sky: skyLight ? (skyLight[idx] || 0) : 15,
+        block: blockLight ? (blockLight[idx] || 0) : 0
+      };
+    }
+    
+    // Need to look up from neighbor chunk
+    const globalX = cx * CHUNK_SIZE + lx;
+    const globalZ = cz * CHUNK_SIZE + lz;
+    const neighborCX = Math.floor(globalX / CHUNK_SIZE);
+    const neighborCZ = Math.floor(globalZ / CHUNK_SIZE);
+    const localNX = ((globalX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localNZ = ((globalZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    
+    const neighbor = this.chunks.get(this._key(neighborCX, neighborCZ));
+    if (!neighbor || !neighbor.skyLight || !neighbor.blockLight) {
+      // Neighbor not loaded or missing light data - assume full brightness
+      return { sky: 15, block: 0 };
+    }
+    
+    const idx = (localNX * CHUNK_SIZE + localNZ) * HEIGHT + (ly - MIN_Y);
+    return {
+      sky: neighbor.skyLight[idx] || 0,
+      block: neighbor.blockLight[idx] || 0
+    };
+  }
+
+  // Get combined face light level considering time of day and neighbor chunks
+  _getFaceLight(cx, cz, lx, ly, lz, faceIdx, skyLight, blockLight) {
+    // Face directions: +X, -X, +Y, -Y, +Z, -Z
+    const faceNormals = [
+      [1, 0, 0], [-1, 0, 0],
+      [0, 1, 0], [0, -1, 0],
+      [0, 0, 1], [0, 0, -1]
+    ];
+    
+    const [dx, dy, dz] = faceNormals[faceIdx];
+    const adjX = lx + dx;
+    const adjY = ly + dy;
+    const adjZ = lz + dz;
+    
+    const { sky, block } = this._getLight(cx, cz, adjX, adjY, adjZ, skyLight, blockLight);
+    
+    // Apply time-of-day modifier to sky light
+    const dayBrightness = this._getDayBrightness(this._timeOfDay);
+    const effectiveSky = Math.floor(sky * dayBrightness);
+    let light = Math.max(effectiveSky, block);
+    if (faceIdx === 0 || faceIdx === 1 || faceIdx === 2) {
+      light = Math.min(15, light + 3);
+    }
+    return light;
+  }
+
+  // Get brightness multiplier based on time of day (0.25 to 1.0)
+  _getDayBrightness(timeOfDay) {
+    const t = timeOfDay % 1;
+    const angle = (t - 0.25) * Math.PI * 2;
+    const raw = (Math.sin(angle) + 1) / 2;
+    return 0.25 + raw * 0.75;
+  }
+
+  _loadChunk(cx, cz) {
+    // Legacy synchronous load (fallback). Prefer worker pipeline.
+    const chunk = generateChunk(cx, cz, this.seed);
+    this._finalizeChunkFromWorker(chunk, cx, cz);
+  }
+
+  // Finalize chunk data received/generated off-main-thread: compute top, build meshes, add to scene
+  _finalizeChunkFromWorker(chunk, cx, cz, meta = null) {
+    const bs = this.blockSize;
+
+    // If chunk missing, abort
+    if (!chunk || !chunk.data) return;
+    // If a chunk with this key is already present, skip
+    const fKey = this._key(cx, cz);
+    if (this.chunks.has(fKey)) return;
+    if (this._playerChunkX !== null && this._playerChunkZ !== null) {
+      const dx = cx - this._playerChunkX;
+      const dz = cz - this._playerChunkZ;
+      const distanceSquared = dx * dx + dz * dz;
+      const maxDistanceSquared = this.viewDistance * this.viewDistance;
+      
+      if (distanceSquared > maxDistanceSquared) {
+        if (DEBUG.logChunkLoading) {
+          const skipMsg = `ChunkManager: Skipping chunk ${cx},${cz} - outside view distance (${Math.sqrt(distanceSquared).toFixed(1)} > ${this.viewDistance})`;
+          console.log(skipMsg);
+          if (this._debugOverlay) this._debugOverlay.pushMessage(skipMsg, { duration: 2200 });
+        }
+        return;
+      }
+    }
+
+    // Compute top array for collision and rendering (highest non-air block)
+    const top = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        let topY = MIN_Y - 1;
+        for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = chunk.data[idx];
+          if (blockId !== BLOCK_AIR) { topY = y; break; }
+        }
+        top[x * CHUNK_SIZE + z] = topY;
+      }
+    }
+
+    // Calculate per-block lighting
+    const { skyLight, blockLight } = calculateChunkLighting(chunk.data, cx, cz, null);
+
+    // Build optimized mesh with face culling and per-face lighting
+    const meshes = this._buildChunkMesh(chunk, cx, cz, top, skyLight, blockLight);
+    const group = new THREE.Group();
+    for (const mesh of meshes) group.add(mesh);
+
+    // Position the chunk group at its world origin so geometry can be local
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    group.position.set(chunkWorldX, 0, chunkWorldZ);
+
+    this.scene.add(group);
+    // Compute some diagnostics for logging
+    if (DEBUG.logChunkLoading) {
+      const now = performance.now();
+      const queuedAt = meta && meta.queuedAt ? meta.queuedAt : null;
+      const elapsed = queuedAt ? (now - queuedAt).toFixed(1) : null;
+      // Count non-air blocks (simple byte scan)
+      let nonAir = 0;
+      const dataArr = chunk.data;
+      for (let i = 0; i < dataArr.length; i++) if (dataArr[i] !== 0) nonAir++;
+      // Top stats
+      let minTop = Infinity, maxTop = -Infinity, sumTop = 0, topCount = 0;
+      for (let i = 0; i < top.length; i++) {
+        const v = top[i];
+        if (v > (MIN_Y - 1)) {
+          minTop = Math.min(minTop, v);
+          maxTop = Math.max(maxTop, v);
+          sumTop += v;
+          topCount++;
+        }
+      }
+      const avgTop = topCount > 0 ? (sumTop / topCount) : -Infinity;
+      const source = queuedAt ? (meta && meta.priority !== undefined ? 'worker' : 'queued') : 'sync';
+      const loadMsg = `Loaded chunk ${cx},${cz} (${source}) ${elapsed !== null ? elapsed + 'ms' : 'sync'} nonAir=${nonAir}/${dataArr.length}`;
+      console.log(`ChunkManager: ${loadMsg} topMin=${isFinite(minTop) ? minTop : 'n/a'} topMax=${isFinite(maxTop) ? maxTop : 'n/a'} topAvg=${isFinite(avgTop) ? avgTop.toFixed(1) : 'n/a'} loadedChunks=${this.chunks.size + 1}`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(loadMsg, { duration: 4000 });
+    }
+
+    const key = this._key(cx, cz);
+    this.chunks.set(key, { cx, cz, group, top, data: chunk.data, skyLight, blockLight, builtAtTime: this._timeOfDay });
+    
+    // Rebuild neighboring chunks to properly cull faces that are now hidden by this new chunk
+    this._rebuildNeighborChunks(cx, cz);
+    
+    // Update player chunk borders if this is the player's current chunk
+    if (cx === this._playerChunkX && cz === this._playerChunkZ && this.showBorders) {
+      this._updatePlayerChunkBorders();
+    }
+  }
+
+  // Rebuild neighboring chunks when a new chunk is loaded to properly cull border faces
+  _rebuildNeighborChunks(cx, cz) {
+    // Check all 4 neighboring chunks (N, S, E, W)
+    const neighbors = [
+      [cx + 1, cz],     // East
+      [cx - 1, cz],     // West
+      [cx, cz + 1],     // South
+      [cx, cz - 1]      // North
+    ];
+    
+    for (const [nx, nz] of neighbors) {
+      const neighborKey = this._key(nx, nz);
+      const neighbor = this.chunks.get(neighborKey);
+      if (neighbor) {
+        // Rebuild the neighbor chunk mesh to properly cull faces now hidden by this new chunk
+        this._rebuildChunkMeshOnly(nx, nz);
+      }
+    }
+  }
+
+  _addTrees(chunk, cx, cz) {
+    // Deterministic RNG per chunk (Java LCG algorithm)
+    const seedMix = BigInt((this.seed ^ ((cx * 73856093) >>> 0) ^ ((cz * 19349663) >>> 0)) >>> 0);
+    let s = seedMix & ((1n << 48n) - 1n);
+    const rng = () => {
+      s = (s * 25214903917n + 11n) & ((1n << 48n) - 1n);
+      const value = Number(s >> 22n);
+      return value / (1 << 26);
+    };
+
+    // Find grass tops and place trees
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        // Find top block in column
+        let topY = MIN_Y - 1;
+        for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          if (chunk.data[idx] !== BLOCK_AIR) { topY = y; break; }
+        }
+        if (topY < MIN_Y) continue;
+
+        const topIdx = (x * CHUNK_SIZE + z) * HEIGHT + (topY - MIN_Y);
+        if (chunk.data[topIdx] !== BLOCK_GRASS) continue;
+        if (rng() > TREES.probability) continue;
+
+        // Tree trunk
+        const tHeight = TREES.minHeight + Math.floor(rng() * (TREES.maxHeight - TREES.minHeight + 1));
+        for (let h = 1; h <= tHeight; h++) {
+          const by = topY + h;
+          if (by < MIN_Y || by > MIN_Y + HEIGHT - 1) continue;
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (by - MIN_Y);
+          chunk.data[idx] = BLOCK_WOOD;
+        }
+
+        // Leaves blob
+        for (let lx = -1; lx <= 1; lx++) {
+          for (let lz = -1; lz <= 1; lz++) {
+            for (let ly = 0; ly <= 2; ly++) {
+              if (ly === 2 && Math.abs(lx) === 1 && Math.abs(lz) === 1) continue;
+              const px = x + lx, pz = z + lz;
+              const by = topY + 1 + tHeight + ly;
+              if (px < 0 || px >= CHUNK_SIZE || pz < 0 || pz >= CHUNK_SIZE) continue;
+              if (by < MIN_Y || by > MIN_Y + HEIGHT - 1) continue;
+              const idx = (px * CHUNK_SIZE + pz) * HEIGHT + (by - MIN_Y);
+              if (chunk.data[idx] === BLOCK_AIR) chunk.data[idx] = BLOCK_LEAVES;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _buildChunkMesh(chunk, cx, cz, top, skyLight = null, blockLight = null) {
+    const bs = this.blockSize;
+    // Build geometry using local chunk-space coordinates (0..CHUNK_SIZE*bs)
+    // and let the caller position the returned group at the chunk world origin.
+
+    // Collect faces per material type and face direction
+    // For single-material blocks: key = 'stone', 'dirt', etc.
+    // For multi-material blocks (grass, wood): key = 'grass_0', 'grass_1', etc.
+    const faceLists = {};
+
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        const topY = top[x * CHUNK_SIZE + z];
+        if (topY < MIN_Y) continue;
+
+        for (let y = MIN_Y; y <= topY; y++) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = chunk.data[idx];
+          if (blockId === BLOCK_AIR) continue;
+          
+          // Skip cross-model blocks in normal face rendering
+          if (CROSS_BLOCKS.has(blockId)) continue;
+
+          // Check each face direction
+          for (let faceIdx = 0; faceIdx < 6; faceIdx++) {
+            const dir = FACE_DIRS[faceIdx].dir;
+            const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
+            if (nx < 0 || nx >= CHUNK_SIZE || nz < 0 || nz >= CHUNK_SIZE) {
+              const globalX = cx * CHUNK_SIZE + nx;
+              const globalZ = cz * CHUNK_SIZE + nz;
+              const neighborCX = Math.floor(globalX / CHUNK_SIZE);
+              const neighborCZ = Math.floor(globalZ / CHUNK_SIZE);
+              const neighborKey = this._key(neighborCX, neighborCZ);
+              if (!this.chunks.has(neighborKey)) {continue;
+              }
+            }
+
+            const neighborId = this._getBlock(chunk.data, cx, cz, nx, ny, nz);
+
+            // Only render face if neighbor is transparent or block is transparent (for water/ice surfaces)
+            if (!this._isTransparent(neighborId) && !this._isTransparent(blockId)) continue;
+            if (blockId === BLOCK_WATER && neighborId === BLOCK_WATER) continue;
+            if (blockId === BLOCK_ICE && neighborId === BLOCK_ICE) continue;
+
+            // Determine material key
+            let matKey;
+            let overlayMatKey = null; // For blocks needing overlay (grass)
+            switch (blockId) {
+              case BLOCK_GRASS:
+                matKey = `grass_${faceIdx}`;
+                // Add overlay for side faces only (not top=2 or bottom=3)
+                if (faceIdx !== 2 && faceIdx !== 3) {
+                  overlayMatKey = `grassOverlay_${faceIdx}`;
+                }
+                break;
+              case BLOCK_GRASS_SNOW:
+                matKey = `grassSnow_${faceIdx}`;
+                break;
+              case BLOCK_WOOD:
+                matKey = `wood_${faceIdx}`;
+                break;
+              case BLOCK_CACTUS:
+                matKey = `cactus_${faceIdx}`;
+                break;
+              case BLOCK_STONE:
+                matKey = 'stone';
+                break;
+              case BLOCK_DIRT:
+                matKey = 'dirt';
+                break;
+              case BLOCK_SAND:
+                matKey = 'sand';
+                break;
+              case BLOCK_WATER:
+                matKey = 'water';
+                break;
+              case BLOCK_LEAVES:
+                matKey = 'leaves';
+                break;
+              case BLOCK_GRAVEL:
+                matKey = 'gravel';
+                break;
+              case BLOCK_CLAY:
+                matKey = 'clay';
+                break;
+              case BLOCK_RED_SAND:
+                matKey = 'redSand';
+                break;
+              case BLOCK_BEDROCK:
+                matKey = 'bedrock';
+                break;
+              case BLOCK_SNOW:
+                matKey = 'snow';
+                break;
+              case BLOCK_ICE:
+                matKey = 'ice';
+                break;
+              case BLOCK_COAL_ORE:
+                matKey = 'coalOre';
+                break;
+              case BLOCK_IRON_ORE:
+                matKey = 'ironOre';
+                break;
+              case BLOCK_GOLD_ORE:
+                matKey = 'goldOre';
+                break;
+              case BLOCK_DIAMOND_ORE:
+                matKey = 'diamondOre';
+                break;
+              default:
+                matKey = 'stone';
+            }
+
+            if (!faceLists[matKey]) faceLists[matKey] = [];
+
+            // Add face vertices
+            const corners = FACE_DIRS[faceIdx].corners;
+            const worldX = x * bs;
+            const worldY = y * bs;
+            const worldZ = z * bs;
+
+            // Compute deterministic UV rotation for top faces (+Y)
+            let uvRot = 0;
+            // global block coordinates (in blocks, not world units)
+            const globalBlockX = cx * CHUNK_SIZE + x;
+            const globalBlockY = y;
+            const globalBlockZ = cz * CHUNK_SIZE + z;
+            if ((faceIdx === 2 && blockId != BLOCK_STONE)|| blockId === BLOCK_LEAVES) {
+              uvRot = this._rotFromSeed(globalBlockX, globalBlockY, globalBlockZ);
+            }
+
+            // Calculate light level for this face (from adjacent block in face direction)
+            // Uses _getFaceLight which handles cross-chunk lookups for proper border lighting
+            let faceLight = this._getFaceLight(cx, cz, x, y, z, faceIdx, skyLight, blockLight);
+
+            faceLists[matKey].push({
+              x: worldX, y: worldY, z: worldZ,
+              corners: corners,
+              faceIdx: faceIdx,
+              uvRot: uvRot,
+              light: faceLight
+            });
+
+            // Add overlay face for grass sides (colored overlay on top of base)
+            if (overlayMatKey) {
+              if (!faceLists[overlayMatKey]) faceLists[overlayMatKey] = [];
+              faceLists[overlayMatKey].push({
+                x: worldX, y: worldY, z: worldZ,
+                corners: corners,
+                faceIdx: faceIdx,
+                uvRot: uvRot,
+                light: faceLight
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Collect cross-model blocks (plants rendered as X-shaped billboards)
+    const crossBlocks = {
+      deadBush: [],
+      tallGrass: [],
+      roseBush: [],
+      sunflower: []
+    };
+
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        const topY = top[x * CHUNK_SIZE + z];
+        if (topY < MIN_Y) continue;
+
+        for (let y = MIN_Y; y <= topY; y++) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = chunk.data[idx];
+          
+          if (!CROSS_BLOCKS.has(blockId)) continue;
+
+          const worldX = x * bs;
+          const worldY = y * bs;
+          const worldZ = z * bs;
+
+          // Get light level for this plant (use the light at this position)
+          const { sky, block } = this._getLight(cx, cz, x, y, z, skyLight, blockLight);
+          const dayBrightness = this._getDayBrightness(this._timeOfDay);
+          const plantLight = Math.max(Math.floor(sky * dayBrightness), block);
+
+          let matKey;
+          switch (blockId) {
+            case BLOCK_DEAD_BUSH: matKey = 'deadBush'; break;
+            case BLOCK_TALL_GRASS: matKey = 'tallGrass'; break;
+            case BLOCK_ROSE_BUSH: matKey = 'roseBush'; break;
+            case BLOCK_SUNFLOWER: matKey = 'sunflower'; break;
+          }
+          
+          if (matKey && crossBlocks[matKey]) {
+            crossBlocks[matKey].push({ x: worldX, y: worldY, z: worldZ, light: plantLight });
+          }
+        }
+      }
+    }
+
+    // Build meshes from face lists
+    const meshes = [];
+    for (const [matKey, faces] of Object.entries(faceLists)) {
+      if (faces.length === 0) continue;
+
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const colors = []; // Vertex colors for per-face lighting
+      const indices = [];
+
+      let vertexOffset = 0;
+      for (const face of faces) {
+        const corners = face.corners;
+        const faceData = FACE_DIRS[face.faceIdx];
+        const dir = faceData.dir;
+        const faceUVs = faceData.uvs;
+        
+        // Calculate brightness from light level
+        const lightLevel = face.light !== undefined ? face.light : 15;
+        const brightness = lightToRenderBrightness(lightLevel);
+
+        // Add 4 vertices for this face
+        for (let i = 0; i < 4; i++) {
+          const c = corners[i];
+          positions.push(
+            face.x + c[0] * this.blockSize,
+            face.y + c[1] * this.blockSize,
+            face.z + c[2] * this.blockSize
+          );
+          normals.push(dir[0], dir[1], dir[2]);
+          const rot = face.uvRot || 0;
+          const [ru, rv] = this._rotateUVPair(faceUVs[i][0], faceUVs[i][1], rot);
+          uvs.push(ru, rv);
+          // Add vertex color (grayscale for lighting)
+          colors.push(brightness, brightness, brightness);
+        }
+
+        // Add 2 triangles (6 indices)
+        indices.push(
+          vertexOffset, vertexOffset + 1, vertexOffset + 2,
+          vertexOffset, vertexOffset + 2, vertexOffset + 3
+        );
+        vertexOffset += 4;
+      }
+
+      // Create geometry
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+
+      // Get material
+      let material;
+      if (matKey.startsWith('grass_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.grass[faceIdx];
+      } else if (matKey.startsWith('grassOverlay_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.grassOverlay[faceIdx];
+      } else if (matKey.startsWith('grassSnow_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.grassSnow[faceIdx];
+      } else if (matKey.startsWith('wood_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.wood[faceIdx];
+      } else if (matKey.startsWith('cactus_')) {
+        const faceIdx = parseInt(matKey.split('_')[1]);
+        material = this.materials.cactus[faceIdx];
+      } else {
+        material = this.materials[matKey];
+      }
+
+      // Skip if material is undefined
+      if (!material) {
+        console.warn('Missing material for:', matKey);
+        geometry.dispose();
+        continue;
+      }
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.frustumCulled = true;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      meshes.push(mesh);
+    }
+
+    // Build cross-model meshes (X-shaped billboards for plants)
+    for (const [matKey, blocks] of Object.entries(crossBlocks)) {
+      if (blocks.length === 0) continue;
+
+      const positions = [];
+      const normals = [];
+      const uvs = [];
+      const colors = []; // Vertex colors for lighting
+      const indices = [];
+
+      let vertexOffset = 0;
+      for (const block of blocks) {
+        const cx = block.x + bs * 0.5;
+        const cy = block.y;
+        const cz = block.z + bs * 0.5;
+        const halfSize = bs * 0.45;
+        
+        // Calculate brightness from light level
+        const lightLevel = block.light !== undefined ? block.light : 15;
+        const brightness = lightToRenderBrightness(lightLevel);
+
+        // Two diagonal quads forming an X shape
+        const quads = [
+          // Diagonal 1 (NE-SW)
+          [
+            [cx - halfSize, cy, cz - halfSize],
+            [cx + halfSize, cy, cz + halfSize],
+            [cx + halfSize, cy + bs, cz + halfSize],
+            [cx - halfSize, cy + bs, cz - halfSize]
+          ],
+          // Diagonal 2 (NW-SE)
+          [
+            [cx - halfSize, cy, cz + halfSize],
+            [cx + halfSize, cy, cz - halfSize],
+            [cx + halfSize, cy + bs, cz - halfSize],
+            [cx - halfSize, cy + bs, cz + halfSize]
+          ]
+        ];
+
+        for (const quad of quads) {
+          // Add vertices
+          positions.push(...quad[0], ...quad[1], ...quad[2], ...quad[3]);
+          // Use up normal for all vertices
+          normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+          // UVs
+          uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+          // Vertex colors for lighting (4 vertices per quad)
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
+          colors.push(brightness, brightness, brightness);
+          // Indices
+          indices.push(
+            vertexOffset, vertexOffset + 1, vertexOffset + 2,
+            vertexOffset, vertexOffset + 2, vertexOffset + 3
+          );
+          vertexOffset += 4;
+        }
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setIndex(indices);
+
+      const material = this.materials[matKey];
+      if (material) {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.frustumCulled = true;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
+        meshes.push(mesh);
+      } else {
+        geometry.dispose();
+      }
+    }
+
+    return meshes;
+  }
+
+  // queue a chunk to be loaded asynchronously (work spread across frames)
+  queueLoad(cx, cz, priority = 0) {
+    const key = this._key(cx, cz);
+    if (this.chunks.has(key)) return;
+    // avoid duplicate queue entries
+    for (let i = 0; i < this._loadQueue.length; i++) {
+      if (this._loadQueue[i].key === key) {
+        // If already queued, update its priority if the new one is closer (smaller)
+        if (priority < this._loadQueue[i].priority) {
+          this._loadQueue[i].priority = priority;
+        }
+        return;
+      }
+    }
+    this._loadQueue.push({ key, cx, cz, priority, queuedAt: performance.now() });
+  }
+
+  // process a small number of queued loads per frame to avoid jank
+  processLoadQueue() {
+    if (this._loadQueue.length === 0) return;
+    
+    // Prevent concurrent processing
+    if (this._isProcessingQueue) return;
+    
+    // Sort by priority (lower = closer = higher priority)
+    this._loadQueue.sort((a, b) => a.priority - b.priority);
+    
+    // Mark as processing to prevent race conditions
+    this._isProcessingQueue = true;
+    
+    // Use requestIdleCallback to only generate chunks when browser is idle
+    // This ensures FPS is never impacted by chunk generation
+    const processWhenIdle = (deadline) => {
+      // Only process if we have enough idle time (at least 10ms)
+      // or if the callback was triggered due to timeout
+      if (deadline.timeRemaining() < 10 && !deadline.didTimeout) {
+        // Not enough idle time, reschedule
+        this._isProcessingQueue = false;
+        if (this._loadQueue.length > 0) {
+          this.processLoadQueue();
+        }
+        return;
+      }
+      
+      // Process one chunk if we have idle time
+      const item = this._loadQueue.shift();
+      if (item && !this.chunks.has(item.key)) {
+        try {
+          // If worker is available, request generation off-main-thread
+          if (this._chunkWorker) {
+            const key = item.key;
+            // Avoid duplicate pending requests
+            if (!this._pendingRequests.has(key)) {
+              this._pendingRequests.set(key, item);
+              this._chunkWorker.postMessage({ 
+                cx: item.cx, 
+                cz: item.cz, 
+                seed: this.seed, 
+                opts: {},
+                priority: item.priority 
+              });
+            }
+          } else {
+            // Fallback to synchronous generation
+            this._loadChunk(item.cx, item.cz);
+          }
+        } catch (e) {
+          console.warn('Chunk load failed for', item.key, e);
+        }
+      }
+      
+      // Reset processing flag before scheduling next
+      this._isProcessingQueue = false;
+      
+      // Schedule next chunk if queue not empty
+      if (this._loadQueue.length > 0) {
+        this.processLoadQueue();
+      }
+    };
+    
+    if (typeof requestIdleCallback !== 'undefined') {
+      // Use idle callback with 500ms timeout to ensure chunks eventually load
+      requestIdleCallback(processWhenIdle, { timeout: 500 });
+    } else {
+      // Fallback for browsers without requestIdleCallback
+      setTimeout(() => {
+        processWhenIdle({ timeRemaining: () => 50, didTimeout: true });
+      }, 50);
+    }
+  }
+
+  // Process finalization queue - limit per frame to avoid lag spikes
+  _processFinalizationQueue() {
+    // Increase finalization rate when queue is growing (player moving fast into new terrain)
+    const baseRate = this._maxFinalizationsPerFrame;
+    const urgentRate = Math.min(4, Math.max(baseRate, Math.ceil(this._finalizationQueue.length / 10)));
+    const maxToProcess = this._finalizationQueue.length > 5 ? urgentRate : baseRate;
+    
+    let processedCount = 0;
+    
+    // Sort by priority (distance from player) - closer chunks first
+    if (this._playerChunkX !== null && this._playerChunkZ !== null) {
+      this._finalizationQueue.sort((a, b) => {
+        const aDist = (a.cx - this._playerChunkX) ** 2 + (a.cz - this._playerChunkZ) ** 2;
+        const bDist = (b.cx - this._playerChunkX) ** 2 + (b.cz - this._playerChunkZ) ** 2;
+        return aDist - bDist;
+      });
+    }
+    
+    while (this._finalizationQueue.length > 0 && processedCount < maxToProcess) {
+      const item = this._finalizationQueue.shift();
+      
+      // Double-check chunk is still needed (player might have moved)
+      if (this._playerChunkX !== null && this._playerChunkZ !== null) {
+        const dx = item.cx - this._playerChunkX;
+        const dz = item.cz - this._playerChunkZ;
+        const distanceSquared = dx * dx + dz * dz;
+        const maxDistanceSquared = this.viewDistance * this.viewDistance;
+        
+        if (distanceSquared > maxDistanceSquared) {
+          continue; // Skip this chunk, don't count toward limit
+        }
+      }
+      
+      // Finalize the chunk (compute lighting, build mesh, add to scene)
+      this._finalizeChunkFromWorker(item.chunk, item.cx, item.cz, item.meta);
+      processedCount++;
+    }
+  }
+
+  // Process unload queue - limit per frame to avoid lag spikes
+  _processUnloadQueue() {
+    // Increase unload rate when queue is large (player moving fast)
+    const baseRate = this._maxUnloadsPerFrame;
+    const urgentRate = this._unloadQueue.length > 10 ? Math.min(6, baseRate * 2) : baseRate;
+    const maxToProcess = urgentRate;
+    
+    let unloadedCount = 0;
+    
+    while (this._unloadQueue.length > 0 && unloadedCount < maxToProcess) {
+      const item = this._unloadQueue.shift();
+      
+      // Only unload if chunk still exists (might have been handled already)
+      if (this.chunks.has(item.key)) {
+        this._unloadChunk(item.cx, item.cz);
+        unloadedCount++;
+      }
+    }
+  }
+
+  _unloadChunk(cx, cz) {
+    const key = this._key(cx, cz);
+    const rec = this.chunks.get(key);
+    if (!rec) return;
+    
+    // Dispose geometries to free GPU memory (materials are shared, don't dispose)
+    let meshCount = 0;
+    rec.group.traverse((child) => {
+      if (child.isMesh && child.geometry) {
+        child.geometry.dispose();
+        meshCount++;
+      }
+    });
+    
+    this.scene.remove(rec.group);
+    this.chunks.delete(key);
+    
+    // REMOVED: Rebuilding neighboring chunks on unload causes lag
+    // Neighbors will be rebuilt naturally when new chunks load nearby
+    // this._rebuildNeighborChunks(cx, cz);
+    
+    // Clear player borders if this was the player's chunk
+    if (cx === this._playerChunkX && cz === this._playerChunkZ) {
+      this._clearPlayerBorders();
+    }
+    if (DEBUG.logChunkLoading) {
+      const unloadMsg = `Unloaded chunk ${cx},${cz} meshesRemoved=${meshCount}`;
+      console.log(`ChunkManager: ${unloadMsg} loadedChunks=${this.chunks.size}`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(unloadMsg, { duration: 3000 });
+    }
+  }
+
+  // update loaded chunks based on center world position
+  update(centerWorldX, centerWorldZ) {
+    const bs = this.blockSize;
+
+    // Process pending chunk finalizations first (spread work across frames)
+    this._processFinalizationQueue();
+    
+    // Process pending chunk unloads (spread work across frames)
+    this._processUnloadQueue();
+
+    // compute center chunk coords
+    const centerChunkX = Math.floor(centerWorldX / (CHUNK_SIZE * bs));
+    const centerChunkZ = Math.floor(centerWorldZ / (CHUNK_SIZE * bs));
+
+    // Update player chunk borders if player moved to a different chunk
+    if (this._playerChunkX !== centerChunkX || this._playerChunkZ !== centerChunkZ) {
+      this._playerChunkX = centerChunkX;
+      this._playerChunkZ = centerChunkZ;
+      this._updatePlayerChunkBorders();
+    }
+
+    const radius = this.viewDistance;
+    const wanted = new Set();
+    
+    for (let cx = centerChunkX - radius; cx <= centerChunkX + radius; cx++) {
+      for (let cz = centerChunkZ - radius; cz <= centerChunkZ + radius; cz++) {
+        wanted.add(this._key(cx, cz));
+        if (!this.chunks.has(this._key(cx, cz))) {
+          // Priority = distance squared (closer chunks load first)
+          const dx = cx - centerChunkX;
+          const dz = cz - centerChunkZ;
+          const priority = dx * dx + dz * dz;
+          this.queueLoad(cx, cz, priority);
+        }
+      }
+    }
+
+    // Unload chunks outside view distance
+    const chunksToUnload = [];
+    for (const [key, chunk] of this.chunks) {
+      if (!wanted.has(key)) {
+        chunksToUnload.push({ cx: chunk.cx, cz: chunk.cz });
+      }
+    }
+    
+    // Queue chunks for unloading instead of unloading all at once
+    for (const { cx, cz } of chunksToUnload) {
+      const key = this._key(cx, cz);
+      // Avoid duplicate queue entries
+      if (!this._unloadQueue.some(item => item.key === key)) {
+        this._unloadQueue.push({ key, cx, cz });
+      }
+    }
+    
+    if (DEBUG.logChunkLoading && chunksToUnload.length > 0) {
+      const uMsg = `Queued ${chunksToUnload.length} chunks for unloading`;
+      console.log(`ChunkManager: ${uMsg}`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(uMsg, { duration: 2600 });
+    }
+
+    // Clean up pending worker requests for chunks outside view distance
+    if (this._chunkWorker && this._pendingRequests.size > 0) {
+      const pendingToCancel = [];
+      for (const [key, request] of this._pendingRequests) {
+        if (!wanted.has(key)) {
+          pendingToCancel.push(key);
+        }
+      }
+      
+      for (const key of pendingToCancel) {
+        this._pendingRequests.delete(key);
+      }
+      
+      if (DEBUG.logChunkLoading && pendingToCancel.length > 0) {
+        const cMsg = `Cancelled ${pendingToCancel.length} pending worker requests`;
+        console.log(`ChunkManager: ${cMsg} outside view distance`);
+        if (this._debugOverlay) this._debugOverlay.pushMessage(cMsg, { duration: 2600 });
+      }
+    }
+
+    // Clean up load queue for chunks outside view distance
+    const originalQueueLength = this._loadQueue.length;
+    this._loadQueue = this._loadQueue.filter(item => wanted.has(item.key));
+    const removedFromQueue = originalQueueLength - this._loadQueue.length;
+    
+    if (DEBUG.logChunkLoading && removedFromQueue > 0) {
+      const rMsg = `Removed ${removedFromQueue} items from load queue`;
+      console.log(`ChunkManager: ${rMsg} outside view distance`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(rMsg, { duration: 2200 });
+    }
+
+    // Clean up finalization queue for chunks outside view distance
+    const originalFinalizationLength = this._finalizationQueue.length;
+    this._finalizationQueue = this._finalizationQueue.filter(item => {
+      const key = this._key(item.cx, item.cz);
+      return wanted.has(key);
+    });
+    const removedFromFinalization = originalFinalizationLength - this._finalizationQueue.length;
+    
+    if (DEBUG.logChunkLoading && removedFromFinalization > 0) {
+      const fMsg = `Removed ${removedFromFinalization} items from finalization queue`;
+      console.log(`ChunkManager: ${fMsg} outside view distance`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(fMsg, { duration: 2200 });
+    }
+  }
+
+  // Query top surface Y in world coordinates. Returns world Y of top surface (one unit above top block), or -Infinity.
+  // Set allowSyncLoad=true for critical operations like spawn that need immediate results
+  getTopAtWorld(worldX, worldZ, allowSyncLoad = false) {
+    const bs = this.blockSize;
+    // compute global column indices relative to chunk grid used in _loadChunk
+    // We don't use totalHalf now; instead compute chunk and local col directly
+    const globalColX = Math.floor(worldX / bs);
+    const globalColZ = Math.floor(worldZ / bs);
+    const cx = Math.floor(globalColX / CHUNK_SIZE);
+    const cz = Math.floor(globalColZ / CHUNK_SIZE);
+    const localX = ((globalColX % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((globalColZ % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    let rec = this.chunks.get(this._key(cx, cz));
+    if (!rec) {
+      if (allowSyncLoad) {
+        // Critical operation (spawn, etc.) - load synchronously
+        this._loadChunk(cx, cz);
+        rec = this.chunks.get(this._key(cx, cz));
+        if (!rec) return -Infinity;
+      } else {
+        // Queue chunk for async loading instead of blocking main thread
+        const dx = cx - this._playerChunkX;
+        const dz = cz - this._playerChunkZ;
+        const priority = dx * dx + dz * dz;
+        this.queueLoad(cx, cz, priority);
+        return -Infinity; // Return sentinel until chunk loads
+      }
+    }
+    const topBlockY = rec.top[localX * CHUNK_SIZE + localZ];
+    if (topBlockY < MIN_Y) return -Infinity;
+    return (topBlockY + 1) * bs;
+  }
+
+  // Find the top of the highest solid block at or below the given world Y coordinate.
+  // Returns the world Y of the top surface of that block, or -Infinity if none found.
+  // Set allowSyncLoad=true for critical operations like spawn that need immediate results
+  getGroundAtWorld(worldX, worldY, worldZ, allowSyncLoad = false) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const startBlockY = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    // Clamp startBlockY to chunk height range to avoid indexing past chunk data
+    const maxBlockY = MIN_Y + HEIGHT - 1;
+    const startBlockYClamped = Math.min(startBlockY, maxBlockY);
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const recKey = this._key(cx, cz);
+    let rec = this.chunks.get(recKey);
+    if (!rec) {
+      if (allowSyncLoad) {
+        // Critical operation (spawn, etc.) - load synchronously
+        this._loadChunk(cx, cz);
+        rec = this.chunks.get(recKey);
+        if (!rec) return -Infinity;
+      } else {
+        // Queue chunk for async loading instead of blocking main thread
+        const dx = cx - this._playerChunkX;
+        const dz = cz - this._playerChunkZ;
+        const priority = dx * dx + dz * dz;
+        this.queueLoad(cx, cz, priority);
+        return -Infinity; // Return sentinel until chunk loads
+      }
+    }
+    // Scan downward from startBlockY to find the first solid (non-passable) block
+    for (let by = startBlockYClamped; by >= MIN_Y; by--) {
+      const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (by - MIN_Y);
+      const blockId = rec.data[idx];
+      if (blockId !== 0 && !PASSABLE_BLOCKS.has(blockId)) {
+        // Found solid block, return top surface (one block above)
+        return (by + 1) * bs;
+      }
+    }
+    return -Infinity;
+  }
+
+  // Return block id at world coords (x,y,z). Loads chunk if needed. 0 = air.
+  // Set conservativeUnloaded=true to treat unloaded chunks as solid (prevents phasing through unloaded terrain)
+  getBlockAtWorld(worldX, worldY, worldZ, conservativeUnloaded = false) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const gyBlock = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const recKey = this._key(cx, cz);
+    let rec = this.chunks.get(recKey);
+    if (!rec) {
+      // Queue chunk for async loading instead of blocking main thread
+      const dx = cx - this._playerChunkX;
+      const dz = cz - this._playerChunkZ;
+      const priority = dx * dx + dz * dz;
+      this.queueLoad(cx, cz, priority);
+      // If conservative mode, treat unloaded chunks as solid to prevent phasing through
+      return conservativeUnloaded ? 1 : 0; // Return stone (1) or air (0)
+    }
+    const y = gyBlock;
+    if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) return 0;
+    const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
+    return rec.data[idx] || 0;
+  }
+
+  // Set a block at world coordinates (worldX/worldY/worldZ are world-space positions)
+  setBlockAtWorld(worldX, worldY, worldZ, blockId) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const gyBlock = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const recKey = this._key(cx, cz);
+    let rec = this.chunks.get(recKey);
+    if (!rec) {
+      // Queue chunk for async loading - can't modify unloaded chunk
+      const dx = cx - this._playerChunkX;
+      const dz = cz - this._playerChunkZ;
+      const priority = dx * dx + dz * dz;
+      this.queueLoad(cx, cz, priority);
+      if (DEBUG.logChunkLoading) {
+        console.warn(`Cannot set block at (${worldX}, ${worldY}, ${worldZ}) - chunk not loaded`);
+      }
+      return false; // Cannot modify unloaded chunk
+    }
+
+    const y = gyBlock;
+    if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) return false;
+    const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
+    rec.data[idx] = blockId;
+
+    // Recompute top for this column (ignore passable blocks)
+    const colIndex = localX * CHUNK_SIZE + localZ;
+    let topY = MIN_Y - 1;
+    for (let ty = MIN_Y + HEIGHT - 1; ty >= MIN_Y; ty--) {
+      const tIdx = (localX * CHUNK_SIZE + localZ) * HEIGHT + (ty - MIN_Y);
+      const bid = rec.data[tIdx];
+      if (bid !== BLOCK_AIR && !PASSABLE_BLOCKS.has(bid)) { topY = ty; break; }
+    }
+    rec.top[colIndex] = topY;
+
+    // Rebuild this chunk's meshes in-place
+    this._rebuildChunk(cx, cz);
+
+    // If changed block is on chunk border, rebuild neighboring chunks too (to update faces)
+    const rebuildIfNeighbour = (nx, nz) => {
+      const nKey = this._key(nx, nz);
+      const nRec = this.chunks.get(nKey);
+      if (nRec) this._rebuildChunk(nx, nz);
+    };
+    if (localX === 0) rebuildIfNeighbour(cx - 1, cz);
+    if (localX === CHUNK_SIZE - 1) rebuildIfNeighbour(cx + 1, cz);
+    if (localZ === 0) rebuildIfNeighbour(cx, cz - 1);
+    if (localZ === CHUNK_SIZE - 1) rebuildIfNeighbour(cx, cz + 1);
+
+    return true;
+  }
+
+  // Rebuild chunk meshes for an already-loaded chunk (in-place replacement)
+  _rebuildChunk(cx, cz) {
+    const key = this._key(cx, cz);
+    const rec = this.chunks.get(key);
+    if (!rec) return;
+    const bs = this.blockSize;
+
+    // Dispose old geometries and remove from scene
+    if (rec.group) {
+      // Remove all children from the group first
+      while (rec.group.children.length > 0) {
+        const child = rec.group.children[0];
+        rec.group.remove(child);
+        if (child.isMesh && child.geometry) {
+          child.geometry.dispose();
+        }
+      }
+      this.scene.remove(rec.group);
+      rec.group = null;
+    }
+
+    // Recalculate the full top array to ensure it's accurate
+    for (let x = 0; x < CHUNK_SIZE; x++) {
+      for (let z = 0; z < CHUNK_SIZE; z++) {
+        let topY = MIN_Y - 1;
+        for (let y = MIN_Y + HEIGHT - 1; y >= MIN_Y; y--) {
+          const idx = (x * CHUNK_SIZE + z) * HEIGHT + (y - MIN_Y);
+          const blockId = rec.data[idx];
+          if (blockId !== BLOCK_AIR) {
+            topY = y;
+            break;
+          }
+        }
+        rec.top[x * CHUNK_SIZE + z] = topY;
+      }
+    }
+
+    // Recalculate lighting
+    const { skyLight, blockLight } = calculateChunkLighting(rec.data, cx, cz, null);
+    rec.skyLight = skyLight;
+    rec.blockLight = blockLight;
+
+    // Build new meshes based on current data and top with lighting
+    const chunkLike = { data: rec.data };
+    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top, skyLight, blockLight);
+    const newGroup = new THREE.Group();
+    for (const mesh of meshes) newGroup.add(mesh);
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    newGroup.position.set(chunkWorldX, 0, chunkWorldZ);
+
+    this.scene.add(newGroup);
+    rec.group = newGroup;
+    rec.builtAtTime = this._timeOfDay;
+    // Update player chunk borders if this is the player's current chunk
+    if (cx === this._playerChunkX && cz === this._playerChunkZ && this.showBorders) {
+      this._updatePlayerChunkBorders();
+    }
+  }
+
+  // Toggle or set chunk border visibility for player's current chunk only
+  showChunkBorders(enable = true) {
+    const want = !!enable;
+    if (want === this.showBorders) return;
+    this.showBorders = want;
+    this._updatePlayerChunkBorders();
+  }
+
+  // Update player chunk borders and sub-grids
+  _updatePlayerChunkBorders() {
+    // Clear existing player chunk borders and sub-grids
+    this._clearPlayerBorders();
+
+    if (!this.showBorders || this._playerChunkX === null || this._playerChunkZ === null) return;
+    const bs = this.blockSize;
+    const cx = this._playerChunkX;
+    const cz = this._playerChunkZ;
+    this._createSubGrids(cx, cz, bs);
+    
+  }
+
+  // Create sub-grids within the player's chunk
+  _createSubGrids(cx, cz, bs) {
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    const gridSize = 16;
+    const subChunkSize = CHUNK_SIZE / gridSize;
+
+    for (let gx = 0; gx < gridSize; gx++) {
+      for (let gz = 0; gz < gridSize; gz++) {
+      if (gx !== 0 && gz !== 0 && gx !== gridSize - 1 && gz !== gridSize - 1) continue;
+
+      const minX = chunkWorldX + gx * subChunkSize * bs;
+      const maxX = chunkWorldX + (gx + 1) * subChunkSize * bs;
+      const minZ = chunkWorldZ + gz * subChunkSize * bs;
+      const maxZ = chunkWorldZ + (gz + 1) * subChunkSize * bs;
+
+      const subBox = new THREE.Box3(
+        new THREE.Vector3(minX, MIN_Y * bs, minZ),
+        new THREE.Vector3(maxX, MAX_Y * bs, maxZ)
+      );
+      const subHelper = new THREE.Box3Helper(subBox, 0x00ff00);
+      this.scene.add(subHelper);
+      this._subGridHelpers.push(subHelper);
+      }
+    }
+  }
+
+  // Clear all player border helpers
+  _clearPlayerBorders() {
+    // Clear main border
+    if (this._playerBorderHelper) {
+      this.scene.remove(this._playerBorderHelper);
+      if (this._playerBorderHelper.geometry) this._playerBorderHelper.geometry.dispose();
+      if (this._playerBorderHelper.material) this._playerBorderHelper.material.dispose();
+      this._playerBorderHelper = null;
+    }
+
+    // Clear sub-grids
+    for (const helper of this._subGridHelpers) {
+      this.scene.remove(helper);
+      if (helper.geometry) helper.geometry.dispose();
+      if (helper.material) helper.material.dispose();
+    }
+    this._subGridHelpers = [];
+  }
+
+  toggleChunkBorders() { this.showChunkBorders(!this.showBorders); }
+
+  // Update time of day (0-1 where 0=midnight, 0.5=noon, 1=midnight)
+  // This affects sky light brightness but not block light
+  setTimeOfDay(time) {
+    const newTime = time % 1;
+    this._timeOfDay = newTime;
+    
+    // Check if time changed significantly since last full rebuild
+    // Calculate circular distance (handles wraparound at 0/1)
+    const timeDiff = Math.min(
+      Math.abs(newTime - this._lastLightingRebuildTime),
+      1 - Math.abs(newTime - this._lastLightingRebuildTime)
+    );
+    
+    if (timeDiff >= this._lightingRebuildThreshold) {
+      this._queueAllChunksForLightingRebuild();
+      this._lastLightingRebuildTime = newTime;
+    }
+    
+    // Process pending lighting rebuilds (a few per frame)
+    this._processLightingRebuildQueue();
+  }
+  
+  // Queue all loaded chunks for lighting rebuild
+  _queueAllChunksForLightingRebuild() {
+    for (const [key, rec] of this.chunks) {
+      // Only queue if not already queued
+      if (!this._lightingRebuildQueue.includes(key)) {
+        this._lightingRebuildQueue.push(key);
+      }
+    }
+  }
+  
+  // Process a limited number of chunk lighting rebuilds per frame
+  _processLightingRebuildQueue() {
+    let rebuiltCount = 0;
+    while (this._lightingRebuildQueue.length > 0 && rebuiltCount < this._maxLightingRebuildsPerFrame) {
+      const key = this._lightingRebuildQueue.shift();
+      const rec = this.chunks.get(key);
+      if (rec) {
+        // Use mesh-only rebuild for time-of-day updates (no lighting recalculation needed)
+        this._rebuildChunkMeshOnly(rec.cx, rec.cz);
+        rebuiltCount++;
+      }
+    }
+  }
+  
+  // Rebuild chunk mesh only (for time-of-day updates) - reuses existing lighting data
+  _rebuildChunkMeshOnly(cx, cz) {
+    const key = this._key(cx, cz);
+    const rec = this.chunks.get(key);
+    if (!rec) return;
+    const bs = this.blockSize;
+
+    // Dispose old geometries and remove from scene
+    if (rec.group) {
+      while (rec.group.children.length > 0) {
+        const child = rec.group.children[0];
+        rec.group.remove(child);
+        if (child.isMesh && child.geometry) {
+          child.geometry.dispose();
+        }
+      }
+      this.scene.remove(rec.group);
+      rec.group = null;
+    }
+
+    // Build new meshes using existing lighting data (no recalculation)
+    const chunkLike = { data: rec.data };
+    const meshes = this._buildChunkMesh(chunkLike, cx, cz, rec.top, rec.skyLight, rec.blockLight);
+    const newGroup = new THREE.Group();
+    for (const mesh of meshes) newGroup.add(mesh);
+    const chunkWorldX = cx * CHUNK_SIZE * bs;
+    const chunkWorldZ = cz * CHUNK_SIZE * bs;
+    newGroup.position.set(chunkWorldX, 0, chunkWorldZ);
+
+    this.scene.add(newGroup);
+    rec.group = newGroup;
+    rec.builtAtTime = this._timeOfDay;
+
+    // Update player chunk borders if this is the player's current chunk
+    if (cx === this._playerChunkX && cz === this._playerChunkZ && this.showBorders) {
+      this._updatePlayerChunkBorders();
+    }
+  }
+
+  // Get current time of day
+  getTimeOfDay() {
+    return this._timeOfDay;
+  }
+
+  // Get light levels at a world position
+  // Returns { skyLight, blockLight, combined } all 0-15
+  getLightAtWorld(worldX, worldY, worldZ) {
+    const bs = this.blockSize;
+    const gx = Math.floor(worldX / bs);
+    const gz = Math.floor(worldZ / bs);
+    const gyBlock = Math.floor((worldY - MIN_Y * bs) / bs) + MIN_Y;
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cz = Math.floor(gz / CHUNK_SIZE);
+    const localX = ((gx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    const localZ = ((gz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
+    
+    const recKey = this._key(cx, cz);
+    const rec = this.chunks.get(recKey);
+    
+    if (!rec || !rec.skyLight || !rec.blockLight) {
+      return { skyLight: 15, blockLight: 0, combined: 15 };
+    }
+    
+    const y = gyBlock;
+    if (y < MIN_Y || y > (MIN_Y + HEIGHT - 1)) {
+      return { skyLight: 15, blockLight: 0, combined: 15 };
+    }
+    
+    const idx = ((localX * CHUNK_SIZE + localZ) * HEIGHT) + (y - MIN_Y);
+    const sky = rec.skyLight[idx] || 0;
+    const block = rec.blockLight[idx] || 0;
+    const dayBrightness = this._getDayBrightness(this._timeOfDay);
+    const combined = Math.max(Math.floor(sky * dayBrightness), block);
+    
+    return { skyLight: sky, blockLight: block, combined };
+  }
+
+  // Dispose of ChunkManager resources (call when no longer needed)
+  dispose() {
+    // Terminate worker thread to prevent memory leak
+    if (this._chunkWorker) {
+      this._chunkWorker.terminate();
+      this._chunkWorker = null;
+    }
+    
+    // Clear pending requests
+    this._pendingRequests.clear();
+    
+    // Clear load queue
+    this._loadQueue = [];
+    
+    // Clear finalization queue
+    this._finalizationQueue = [];
+    
+    // Clear unload queue
+    this._unloadQueue = [];
+    
+    // Unload all chunks and dispose geometries
+    for (const [key, rec] of this.chunks) {
+      if (rec.group) {
+        rec.group.traverse((child) => {
+          if (child.isMesh && child.geometry) {
+            child.geometry.dispose();
+          }
+        });
+        this.scene.remove(rec.group);
+      }
+    }
+    this.chunks.clear();
+    
+    // Clear borders
+    this._clearPlayerBorders();
+    
+    // Dispose shared materials
+    for (const [key, mat] of Object.entries(this.materials)) {
+      if (Array.isArray(mat)) {
+        for (const m of mat) {
+          if (m && m.dispose) m.dispose();
+        }
+      } else if (mat && mat.dispose) {
+        mat.dispose();
+      }
+    }
+    
+    if (DEBUG.logChunkLoading) {
+      console.log('ChunkManager: Disposed all resources');
+    }
+  }
+}
