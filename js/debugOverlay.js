@@ -25,9 +25,20 @@ export default function createDebugOverlay() {
   document.body.appendChild(stack);
 
   const messages = [];
+  let chatSystem = null;
+  
   function pushMessage(text, opts = {}) {
     const duration = opts.duration || 1000;
     const level = opts.level || 'info';
+    
+    // If chat is available, send message there instead
+    if (chatSystem) {
+      const color = level === 'error' ? '#ff5555' : '#ffff55';
+      chatSystem.addMessage(text, { color, level });
+      return { el: null, timeout: null };
+    }
+    
+    // Fallback to floating messages in DOM
     const m = document.createElement('div');
     m.textContent = text;
     m.style.background = level === 'error' ? 'rgba(160,40,40,0.9)' : 'rgba(0,0,0,0.7)';
@@ -64,8 +75,9 @@ export default function createDebugOverlay() {
   }
   document.body.appendChild(el);
 
-  let lastUpdate = 0;
   let fpsSmoothed = 60;
+  let lastDebugLog = 0;
+  const DEBUG_LOG_INTERVAL = 1000; // Log to chat every 1 second
 
   function formatNum(n, d=2) { return (Math.round(n * Math.pow(10,d)) / Math.pow(10,d)).toFixed(d); }
 
@@ -90,7 +102,7 @@ export default function createDebugOverlay() {
   return {
     el,
     pushMessage,
-    show(v = true) { el.style.display = v ? 'block' : 'none'; },
+    setChat(chat) { chatSystem = chat; },
     toggle() { el.style.display = el.style.display === 'none' ? 'block' : 'none'; },
     update(info) {
       // info: { delta, playerPos, chunkX,chunkZ, fps, lookVec, target, loadedChunks }
@@ -168,7 +180,8 @@ export default function createDebugOverlay() {
       if (typeof info.loadedChunks !== 'undefined') lines.push(`Loaded chunks: ${info.loadedChunks}`);
       if (info && info.memory) lines.push(`Mem: ${Math.round(info.memory.usedMB)}MB / ${Math.round(info.memory.totalMB)}MB`);
 
-      el.textContent = lines.join('\n');
+      const debugText = lines.join('\n');
+      el.textContent = debugText;
     }
   };
 }

@@ -1,14 +1,19 @@
 import * as THREE from './three.module.js';
 import { PLAYER, CAMERA } from './config.js';
+import { voxelRaycast } from './voxelRaycast.js';
+import { BLOCK, isBlockBreakable } from '../data/blocks.js';
 
-// Initialize mouse interactions for mining (left click) and placing (right click)
 export function initInteraction(cm, camera, domElement, opts = {}) {
   const reach = PLAYER.blockreach;
-  let placeBlockId = opts.placeBlockId ?? 2; // default to dirt
+  let placeBlockId = opts.placeBlockId ?? 2;
+  let getPlaceBlockId = opts.getPlaceBlockId || null;
+  let onPlaceBlock = opts.onPlaceBlock || null;
+  let shouldDisableInput = opts.shouldDisableInput || null;
   const mouseButtons = { left: false, right: false };
   let placeInterval = null;
   const onContextMenu = (e) => e.preventDefault();
   const onMouseDown = (evt) => {
+    if (shouldDisableInput && shouldDisableInput()) return;
     if (evt.button === 0) {
       mouseButtons.left = true;
       if (opts.blockBreaker) opts.blockBreaker._mouseDown = true;
@@ -45,83 +50,76 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
     const origin = camera.getWorldPosition(new THREE.Vector3());
     const dir = new THREE.Vector3();
     camera.getWorldDirection(dir);
-    const step = 0.1;
-    const maxT = reach;
-    const prev = origin.clone();
+    const hit = voxelRaycast(cm, origin, dir, reach);
+    if (!hit) return;
 
-    for (let t = 0; t <= maxT; t += step) {
-      const p = origin.clone().addScaledVector(dir, t);
-      const bid = cm.getBlockAtWorld(p.x, p.y, p.z);
-
-      if (bid !== 0) {
-        const hx = Math.floor(p.x);
-        const hy = Math.floor(p.y);
-        const hz = Math.floor(p.z);
-
-        if (button === 0 && bid !== 14) {
-          if (opts.blockBreaker) {
-            return;
-          }
-          cm.setBlockAtWorld(hx + 0.5, hy + 0.5, hz + 0.5, 0);
-        } else if (button === 2) {
-
-            const px = Math.floor(prev.x);
-            const py = Math.floor(prev.y);
-            const pz = Math.floor(prev.z);
-            const camPos = origin;
-
-            // Only allow placement if the hit is on a single axis (not edge/corner)
-            const dx = Math.abs(Math.floor(p.x) - px);
-            const dy = Math.abs(Math.floor(p.y) - py);
-            const dz = Math.abs(Math.floor(p.z) - pz);
-            const axisHits = (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0);
-            if (axisHits !== 1) {
-              return;
-            }
-
-            let playerAABB;
-            if (typeof opts.getPlayerAABB === 'function') {
-              // Expect { minX,maxX,minY,maxY,minZ,maxZ }
-              playerAABB = opts.getPlayerAABB();
-            } else {
-              const playerHeight = PLAYER.height;
-              const playerWidth = PLAYER.width;
-              const playerCenterY = camPos.y - (playerHeight * CAMERA.eyeHeight);
-              const halfH = playerHeight / 2;
-              const rad = playerWidth / 2;
-              playerAABB = {
-                minX: camPos.x - rad,
-                maxX: camPos.x + rad,
-                minY: playerCenterY - halfH,
-                maxY: playerCenterY + halfH,
-                minZ: camPos.z - rad,
-                maxZ: camPos.z + rad
-              };
-            }
-
-            const blockMinX = px;
-            const blockMaxX = px + 1;
-            const blockMinY = py;
-            const blockMaxY = py + 1;
-            const blockMinZ = pz;
-            const blockMaxZ = pz + 1;
-
-            const intersects = !(
-              blockMaxX <= playerAABB.minX || blockMinX >= playerAABB.maxX ||
-              blockMaxY <= playerAABB.minY || blockMinY >= playerAABB.maxY ||
-              blockMaxZ <= playerAABB.minZ || blockMinZ >= playerAABB.maxZ
-            );
-
-            if (intersects) {
-              // Don't place block where it would intersect the player
-              return;
-            }
-
-            cm.setBlockAtWorld(px + 0.5, py + 0.5, pz + 0.5, placeBlockId);
-        }
+    if (button === 0 && isBlockBreakable(hit.bid)) {
+      if (opts.blockBreaker) {
         return;
       }
-      prev.copy(p);
+      cm.setBlockAtWorld(hit.bx + 0.5, hit.by + 0.5, hit.bz + 0.5, BLOCK.AIR);
+    } else if (button === 2) {
+      const px = hit.prev.x;
+      const py = hit.prev.y;
+      const pz = hit.prev.z;
+      const camPos = origin;
+
+      // Only allow placement if the hit is on a single axis (not edge/corner)
+      const dx = Math.abs(hit.bx - px);
+      const dy = Math.abs(hit.by - py);
+      const dz = Math.abs(hit.bz - pz);
+      const axisHits = (dx > 0 ? 1 : 0) + (dy > 0 ? 1 : 0) + (dz > 0 ? 1 : 0);
+      if (axisHits !== 1) {
+        return;
+      }
+
+      let playerAABB;
+      if (typeof opts.getPlayerAABB === 'function') {
+        // Expect { minX,maxX,minY,maxY,minZ,maxZ }
+        playerAABB = opts.getPlayerAABB();
+      } else {
+        const playerHeight = PLAYER.height;
+        const playerWidth = PLAYER.width;
+        const playerCenterY = camPos.y - (playerHeight * CAMERA.eyeHeight);
+        const halfH = playerHeight / 2;
+        const rad = playerWidth / 2;
+        playerAABB = {
+          minX: camPos.x - rad,
+          maxX: camPos.x + rad,
+          minY: playerCenterY - halfH,
+          maxY: playerCenterY + halfH,
+          minZ: camPos.z - rad,
+          maxZ: camPos.z + rad
+        };
+      }
+
+      const blockMinX = px;
+      const blockMaxX = px + 1;
+      const blockMinY = py;
+      const blockMaxY = py + 1;
+      const blockMinZ = pz;
+      const blockMaxZ = pz + 1;
+
+      const intersects = !(
+        blockMaxX <= playerAABB.minX || blockMinX >= playerAABB.maxX ||
+        blockMaxY <= playerAABB.minY || blockMinY >= playerAABB.maxY ||
+        blockMaxZ <= playerAABB.minZ || blockMinZ >= playerAABB.maxZ
+      );
+
+      if (intersects) {
+        // Don't place block where it would intersect the player
+        return;
+      }
+
+      // Get block ID to place (from callback if available, otherwise use default)
+      const blockToPlace = getPlaceBlockId ? getPlaceBlockId() : placeBlockId;
+      if (blockToPlace && blockToPlace > BLOCK.AIR) {
+        cm.setBlockAtWorld(px + 0.5, py + 0.5, pz + 0.5, blockToPlace);
+        // Call callback when block is placed
+        if (onPlaceBlock && typeof onPlaceBlock === 'function') {
+          onPlaceBlock(blockToPlace, { x: px, y: py, z: pz });
+        }
+      }
     }
   }
 
@@ -145,7 +143,6 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
   domElement.addEventListener('mouseup', onMouseUp);
 
   return {
-    setPlaceBlock(id) { placeBlockId = id; },
     dispose() {
       stopPlacing();
       domElement.removeEventListener('contextmenu', onContextMenu);
@@ -154,5 +151,3 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
     }
   };
 }
-
-export default initInteraction;

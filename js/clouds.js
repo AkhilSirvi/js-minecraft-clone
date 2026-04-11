@@ -3,215 +3,166 @@ import * as THREE from './three.module.js';
 export function createClouds(scene, opts = {}) {
   const {
     texturePath = 'assets/textures/environment/clouds.png',
-    centerY = 192,        // Cloud layer height
-    thickness = 5,        // Block height in world units
-    pixelScale = 12,      // Each texture pixel = this many world units
-    baseOpacity = 0.85
+    centerY     = 192,   // cloud layer Y
+    thickness    = 5,
+    pixelScale   = 12,
+    baseOpacity  = 0.85,
   } = opts;
 
-  // Create tiled container for seamless looping
   const tiledContainer = new THREE.Group();
   scene.add(tiledContainer);
 
-  // === MATERIALS ===
-  // Top face: brightest (white)
   const topMat = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: baseOpacity,
-    side: THREE.FrontSide,
-    depthWrite: false
+    color: 0xffffff, transparent: true, opacity: baseOpacity,
+    side: THREE.FrontSide, depthWrite: true,
   });
-
-  // Side faces: medium brightness (gray)
   const sideMat = new THREE.MeshBasicMaterial({
-    color: 0xcccccc,
-    transparent: true,
-    opacity: baseOpacity,
-    side: THREE.DoubleSide,
-    depthWrite: false
+    color: 0xcccccc, transparent: true, opacity: 1.0,
+    side: THREE.FrontSide, depthWrite: true,
   });
-
-  // Bottom face: darkest (dark gray)
   const bottomMat = new THREE.MeshBasicMaterial({
-    color: 0xb1b1b1,
-    transparent: true,
-    opacity: baseOpacity,
-    side: THREE.FrontSide,
-    depthWrite: false
+    color: 0xb1b1b1, transparent: true, opacity: baseOpacity,
+    side: THREE.FrontSide, depthWrite: true,
   });
-
   const materials = [topMat, sideMat, bottomMat];
-  const topGeom = new THREE.PlaneGeometry(pixelScale, pixelScale);
-  topGeom.rotateX(-Math.PI / 2);
-  const bottomGeom = new THREE.PlaneGeometry(pixelScale, pixelScale);
-  bottomGeom.rotateX(Math.PI / 2);
-  const sidePosZ = new THREE.PlaneGeometry(pixelScale, thickness);
-  const sideNegZ = new THREE.PlaneGeometry(pixelScale, thickness);
-  sideNegZ.rotateY(Math.PI);
-  const sidePosX = new THREE.PlaneGeometry(pixelScale, thickness);
-  sidePosX.rotateY(-Math.PI / 2);
-  const sideNegX = new THREE.PlaneGeometry(pixelScale, thickness);
-  sideNegX.rotateY(Math.PI / 2);
+
+  function buildGeometry(positions, indices) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+    return geom;
+  }
+
+  function pushQuad(pos, idx, v0, v1, v2, v3) {
+    const base = pos.length / 3;
+    pos.push(...v0, ...v1, ...v2, ...v3);
+    idx.push(base, base + 1, base + 2,
+             base, base + 2, base + 3);
+  }
 
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
-    // Read pixel data
     const canvas = document.createElement('canvas');
-    canvas.width = img.width;
+    canvas.width  = img.width;
     canvas.height = img.height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
-    const imageData = ctx.getImageData(0, 0, img.width, img.height);
-    const pixels = imageData.data;
+    const pixels = ctx.getImageData(0, 0, img.width, img.height).data;
 
-    // Build lookup of opaque pixels
-    const isOpaque = (x, y) => {
-      if (x < 0 || x >= img.width || y < 0 || y >= img.height) return false;
-      const i = (y * img.width + x) * 4;
-      return pixels[i + 3] > 128;
+    const W = img.width, H = img.height;
+    const isOpaque = (col, row) => {
+      if (col < 0 || col >= W || row < 0 || row >= H) return false;
+      return pixels[(row * W + col) * 4 + 3] > 128;
     };
 
-    // Collect block positions and count faces
-    const blocks = [];
-    for (let y = 0; y < img.height; y++) {
-      for (let x = 0; x < img.width; x++) {
-        if (isOpaque(x, y)) {
-          blocks.push({
-            x,
-            y,
-            needsPosZ: !isOpaque(x, y + 1), // +Z neighbor (image Y+ = world Z+)
-            needsNegZ: !isOpaque(x, y - 1),
-            needsPosX: !isOpaque(x + 1, y),
-            needsNegX: !isOpaque(x - 1, y)
-          });
+    const hw = (W * pixelScale) / 2;   // X half-extent
+    const hd = (H * pixelScale) / 2;   // Z half-extent
+    const hy = thickness / 2;          // Y half-thickness
+
+    const topPos  = [], topIdx  = [];
+    const sidePos = [], sideIdx = [];
+    const botPos  = [], botIdx  = [];
+
+    for (let row = 0; row < H; row++) {
+      for (let col = 0; col < W; col++) {
+        if (!isOpaque(col, row)) continue;
+
+        const x0 =  col      * pixelScale - hw;
+        const x1 = (col + 1) * pixelScale - hw;
+        const z0 =  row      * pixelScale - hd;
+        const z1 = (row + 1) * pixelScale - hd;
+
+        // Top face – normal +Y – CCW from above
+        pushQuad(topPos, topIdx,
+          [x0, hy, z0], [x0, hy, z1],
+          [x1, hy, z1], [x1, hy, z0],
+        );
+
+        // Bottom face – normal -Y – CCW from below
+        pushQuad(botPos, botIdx,
+          [x0, -hy, z0], [x1, -hy, z0],
+          [x1, -hy, z1], [x0, -hy, z1],
+        );
+
+        // +Z side – only on exterior edges
+        if (!isOpaque(col, row + 1)) {
+          pushQuad(sidePos, sideIdx,
+            [x0, -hy, z1], [x1, -hy, z1],
+            [x1,  hy, z1], [x0,  hy, z1],
+          );
+        }
+        // -Z side
+        if (!isOpaque(col, row - 1)) {
+          pushQuad(sidePos, sideIdx,
+            [x1, -hy, z0], [x0, -hy, z0],
+            [x0,  hy, z0], [x1,  hy, z0],
+          );
+        }
+        // +X side
+        if (!isOpaque(col + 1, row)) {
+          pushQuad(sidePos, sideIdx,
+            [x1, -hy, z1], [x1, -hy, z0],
+            [x1,  hy, z0], [x1,  hy, z1],
+          );
+        }
+        // -X side
+        if (!isOpaque(col - 1, row)) {
+          pushQuad(sidePos, sideIdx,
+            [x0, -hy, z0], [x0, -hy, z1],
+            [x0,  hy, z1], [x0,  hy, z0],
+          );
         }
       }
     }
 
-    if (blocks.length === 0) return;
+    if (topPos.length === 0) return;
 
-    // Count faces for each type
-    const topCount = blocks.length;
-    const bottomCount = blocks.length;
-    const posZCount = blocks.filter(b => b.needsPosZ).length;
-    const negZCount = blocks.filter(b => b.needsNegZ).length;
-    const posXCount = blocks.filter(b => b.needsPosX).length;
-    const negXCount = blocks.filter(b => b.needsNegX).length;
+    const topGeom  = buildGeometry(topPos,  topIdx);
+    const sideGeom = buildGeometry(sidePos, sideIdx);
+    const botGeom  = buildGeometry(botPos,  botIdx);
 
-    const topMesh = new THREE.InstancedMesh(topGeom, topMat, topCount);
-    const bottomMesh = new THREE.InstancedMesh(bottomGeom, bottomMat, bottomCount);
+    const tileWidth  = W * pixelScale;
+    const tileHeight = H * pixelScale;
 
-    let posZMat = sideMat, negZMat = sideMat, posXMat = sideMat, negXMat = sideMat;
-
-    const posZMesh = posZCount > 0 ? new THREE.InstancedMesh(sidePosZ, posZMat, posZCount) : null;
-    const negZMesh = negZCount > 0 ? new THREE.InstancedMesh(sideNegZ, negZMat, negZCount) : null;
-    const posXMesh = posXCount > 0 ? new THREE.InstancedMesh(sidePosX, posXMat, posXCount) : null;
-    const negXMesh = negXCount > 0 ? new THREE.InstancedMesh(sideNegX, negXMat, negXCount) : null;
-
-    [topMesh, bottomMesh, posZMesh, negZMesh, posXMesh, negXMesh].forEach(m => {
-      if (m) m.frustumCulled = false;
-    });
-
-    // Position all instances
-    const matrix = new THREE.Matrix4();
-    const centerOffsetX = (img.width * pixelScale) / 2;
-    const centerOffsetZ = (img.height * pixelScale) / 2;
-
-    let topIdx = 0, bottomIdx = 0;
-    let posZIdx = 0, negZIdx = 0, posXIdx = 0, negXIdx = 0;
-
-    for (const block of blocks) {
-      // World position for this block
-      const wx = block.x * pixelScale - centerOffsetX + pixelScale / 2;
-      const wz = block.y * pixelScale - centerOffsetZ + pixelScale / 2;
-
-      // Top face (at top of block)
-      matrix.makeTranslation(wx, thickness / 2, wz);
-      topMesh.setMatrixAt(topIdx++, matrix);
-
-      // Bottom face (at bottom of block)
-      matrix.makeTranslation(wx, -thickness / 2, wz);
-      bottomMesh.setMatrixAt(bottomIdx++, matrix);
-
-      // Side faces (only exterior ones)
-      if (block.needsPosZ && posZMesh) {
-        matrix.makeTranslation(wx, 0, wz + pixelScale / 2);
-        posZMesh.setMatrixAt(posZIdx++, matrix);
-      }
-      if (block.needsNegZ && negZMesh) {
-        matrix.makeTranslation(wx, 0, wz - pixelScale / 2);
-        negZMesh.setMatrixAt(negZIdx++, matrix);
-      }
-      if (block.needsPosX && posXMesh) {
-        matrix.makeTranslation(wx + pixelScale / 2, 0, wz);
-        posXMesh.setMatrixAt(posXIdx++, matrix);
-      }
-      if (block.needsNegX && negXMesh) {
-        matrix.makeTranslation(wx - pixelScale / 2, 0, wz);
-        negXMesh.setMatrixAt(negXIdx++, matrix);
-      }
-    }
-
-    // Mark instance matrices as needing update
-    topMesh.instanceMatrix.needsUpdate = true;
-    bottomMesh.instanceMatrix.needsUpdate = true;
-    if (posZMesh) posZMesh.instanceMatrix.needsUpdate = true;
-    if (negZMesh) negZMesh.instanceMatrix.needsUpdate = true;
-    if (posXMesh) posXMesh.instanceMatrix.needsUpdate = true;
-    if (negXMesh) negXMesh.instanceMatrix.needsUpdate = true;
-
-    const cloudTile = new THREE.Group();
-    cloudTile.add(topMesh);
-    cloudTile.add(bottomMesh);
-    if (posZMesh) cloudTile.add(posZMesh);
-    if (negZMesh) cloudTile.add(negZMesh);
-    if (posXMesh) cloudTile.add(posXMesh);
-    if (negXMesh) cloudTile.add(negXMesh);
-
-    // Calculate cloud tile dimensions
-    const tileWidth = img.width * pixelScale;
-    const tileHeight = img.height * pixelScale;
-
-    // Create a 2x2 tiled pattern (balanced performance and coverage)
     for (let tx = 0; tx < 2; tx++) {
       for (let tz = 0; tz < 2; tz++) {
-        const tile = cloudTile.clone();
-        tile.position.set(tx * tileWidth, 0, tz * tileHeight);
-        // Disable frustum culling on all meshes in cloned tile
-        tile.traverse((obj) => {
-          if (obj.isMesh) obj.frustumCulled = false;
-        });
-        tiledContainer.add(tile);
+        const ox = tx * tileWidth;
+        const oz = tz * tileHeight;
+
+        const mBot = new THREE.Mesh(botGeom, bottomMat);
+        mBot.position.set(ox, 0, oz);
+        mBot.renderOrder   = 10;
+        mBot.frustumCulled = false;
+
+        const mTop = new THREE.Mesh(topGeom, topMat);
+        mTop.position.set(ox, 0, oz);
+        mTop.renderOrder   = 11;
+        mTop.frustumCulled = false;
+
+        const mSide = new THREE.Mesh(sideGeom, sideMat);
+        mSide.position.set(ox, 0, oz);
+        mSide.renderOrder   = 12;
+        mSide.frustumCulled = false;
+
+        tiledContainer.add(mBot, mTop, mSide);
       }
     }
-    
-    // Disable frustum culling on container itself
-    tiledContainer.frustumCulled = false;
-    
-    // Set cloud layer height
-    tiledContainer.position.y = centerY;
-    
-    // Store dimensions for looping calculations
-    tiledContainer.userData.width = tileWidth;
+
+    tiledContainer.frustumCulled  = false;
+    tiledContainer.position.y     = centerY;
+    tiledContainer.userData.width  = tileWidth;
     tiledContainer.userData.height = tileHeight;
   };
 
-  img.onerror = () => {
-    console.error('Failed to load cloud texture:', texturePath);
-  };
-
+  img.onerror = () => console.error('failed to load cloud texture:', texturePath);
   img.src = texturePath;
 
-  // Return object for animation updates
   return {
-    group: tiledContainer,
-    texture: { offset: { x: 0, y: 0 } }, // Dummy for compatibility
+    group:    tiledContainer,
     material: topMat,
-    materials: materials,
-    width: 0,
-    height: 0,
-    pixelScale: pixelScale
+    materials,
+    pixelScale,
   };
 }

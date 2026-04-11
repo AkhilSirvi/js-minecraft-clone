@@ -173,22 +173,22 @@ Perlin noise uses 12 gradient vectors pointing to edges of a unit cube, plus 4 d
 
 | Hash & 15 | Gradient Vector | Dot Product |
 |-----------|-----------------|-------------|
-| 0 | (1, 1, 0) | x + y |
-| 1 | (-1, 1, 0) | -x + y |
-| 2 | (1, -1, 0) | x - y |
-| 3 | (-1, -1, 0) | -x - y |
-| 4 | (1, 0, 1) | x + z |
-| 5 | (-1, 0, 1) | -x + z |
-| 6 | (1, 0, -1) | x - z |
-| 7 | (-1, 0, -1) | -x - z |
-| 8 | (0, 1, 1) | y + z |
-| 9 | (0, -1, 1) | -y + z |
-| 10 | (0, 1, -1) | y - z |
-| 11 | (0, -1, -1) | -y - z |
-| 12 | (1, 1, 0) | x + y |
-| 13 | (-1, 1, 0) | -x + y |
-| 14 | (0, -1, 1) | -y + z |
-| 15 | (0, -1, -1) | -y - z |
+| 0         | (1, 1, 0)       | x + y       |
+| 1         | (-1, 1, 0)      | -x + y      |
+| 2         | (1, -1, 0)      | x - y       |
+| 3         | (-1, -1, 0)     | -x - y      |
+| 4         | (1, 0, 1)       | x + z       |
+| 5         | (-1, 0, 1)      | -x + z      |
+| 6         | (1, 0, -1)      | x - z       |
+| 7         | (-1, 0, -1)     | -x - z      |
+| 8         | (0, 1, 1)       | y + z       |
+| 9         | (0, -1, 1)      | -y + z      |
+| 10        | (0, 1, -1)      | y - z       |
+| 11        | (0, -1, -1)     | -y - z      |
+| 12        | (1, 1, 0)       | x + y       |
+| 13        | (-1, 1, 0)      | -x + y      |
+| 14        | (0, -1, 1)      | -y + z      |
+| 15        | (0, -1, -1)     | -y - z      |
 
 The dot product `g · (x, y, z)` is computed efficiently using switch/case without explicit vector math.
 
@@ -351,12 +351,12 @@ index = (local_x × CHUNK_SIZE + local_z) × HEIGHT + local_y
 
 Four climate parameters determine biomes using domain-warped noise:
 
-| Parameter | Scale | Octaves | Purpose |
-|-----------|-------|---------|---------|
-| Temperature | 0.0015 | 4 | Latitude-like bands |
-| Humidity | 0.0025 | 4 | Moisture variation |
-| Continentalness | 0.008 | 5 | Land/ocean distribution |
-| Erosion | 0.004 | 3 | Local terrain roughness |
+| Parameter       | Scale  | Octaves | Purpose                 |
+|-----------------|--------|---------|-------------------------|
+| Temperature     | 0.0015 | 4       | Latitude-like bands     |
+| Humidity        | 0.0025 | 4       | Moisture variation      |
+| Continentalness | 0.008  | 5       | Land/ocean distribution |
+| Erosion         | 0.004  | 3       | Local terrain roughness |
 
 #### 2.3 Domain Warping
 
@@ -431,16 +431,16 @@ Where:
 
 **Biome terrain scales:**
 
-| Biome | Scale Factor | Effect |
-|-------|--------------|--------|
-| Ocean | 0.25 | Very flat |
-| Beach | 0.08 | Nearly flat |
-| Swamp | 0.15 | Slight variation |
-| Plains | 0.35 | Gentle hills |
-| Savanna | 0.40 | Rolling terrain |
-| Forest | 0.45 | Moderate hills |
-| Snowy | 0.65 | Hilly |
-| Mountains | 1.80 | Extreme variation |
+| Biome     | Scale Factor | Effect            |
+|-----------|--------------|-------------------|
+| Ocean     | 0.25         | Very flat         |
+| Beach     | 0.08         | Nearly flat       |
+| Swamp     | 0.15         | Slight variation  |
+| Plains    | 0.35         | Gentle hills      |
+| Savanna   | 0.40         | Rolling terrain   |
+| Forest    | 0.45         | Moderate hills    |
+| Snowy     | 0.65         | Hilly             |
+| Mountains | 1.80         | Extreme variation |
 
 **Erosion factor** reduces terrain amplitude:
 ```
@@ -507,7 +507,7 @@ Where `threshold = 0.5`. The depth bias makes caves more common at lower elevati
 spaghetti = |fbm(x × 0.042, y × 0.018, z × 0.042, octaves=2)| < 0.05
 ```
 
-The absolute value creates a narrow band around zero, producing tunnel-like structures.
+The absolute value creates a narrowband around zero, producing tunnel-like structures.
 
 **Cave carving rules:**
 - Don't carve bedrock (y ≤ MIN_Y + 4)
@@ -531,12 +531,12 @@ T(ore) = 1 - rarity × veinSize
 
 **Ore configuration:**
 
-| Ore | Y Range | Vein Size | Rarity | Threshold |
-|-----|---------|-----------|--------|-----------|
-| Coal | -64 → 128 | 6 | 0.06 | 0.64 |
-| Iron | -64 → 64 | 5 | 0.06 | 0.70 |
-| Gold | -64 → 32 | 4 | 0.015 | 0.94 |
-| Diamond | -64 → 16 | 4 | 0.005 | 0.98 |
+| Ore     | Y Range   | Vein Size | Rarity | Threshold |
+|---------|-----------|-----------|--------|-----------|
+| Coal    | -64 → 128 | 6         | 0.06   | 0.64      |
+| Iron    | -64 → 64  | 5         | 0.06   | 0.70      |
+| Gold    | -64 → 32  | 4         | 0.015  | 0.94      |
+| Diamond | -64 → 16  | 4         | 0.005  | 0.98      |
 
 **Offset by oreId × 100**: Ensures each ore type samples a different noise region, preventing correlation.
 
@@ -637,14 +637,14 @@ normal = edge₁ × edge₂ = (0×1 - 1×0, 1×1 - 0×1, 0×0 - 0×1) = (0, 1, 0
 
 Six faces with their normal vectors and corner offsets:
 
-| Face | Normal | Corners (CCW from outside) |
-|------|--------|---------------------------|
-| +X | (1, 0, 0) | (1,0,0), (1,1,0), (1,1,1), (1,0,1) |
-| -X | (-1, 0, 0) | (0,0,0), (0,0,1), (0,1,1), (0,1,0) |
-| +Y | (0, 1, 0) | (0,1,0), (0,1,1), (1,1,1), (1,1,0) |
-| -Y | (0, -1, 0) | (0,0,0), (1,0,0), (1,0,1), (0,0,1) |
-| +Z | (0, 0, 1) | (0,0,1), (1,0,1), (1,1,1), (0,1,1) |
-| -Z | (0, 0, -1) | (0,0,0), (0,1,0), (1,1,0), (1,0,0) |
+| Face | Normal     | Corners (CCW from outside)         |
+|------|------------|------------------------------------|
+| +X   | (1, 0, 0)  | (1,0,0), (1,1,0), (1,1,1), (1,0,1) |
+| -X   | (-1, 0, 0) | (0,0,0), (0,0,1), (0,1,1), (0,1,0) |
+| +Y   | (0, 1, 0)  | (0,1,0), (0,1,1), (1,1,1), (1,1,0) |
+| -Y   | (0, -1, 0) | (0,0,0), (1,0,0), (1,0,1), (0,0,1) |
+| +Z   | (0, 0, 1)  | (0,0,1), (1,0,1), (1,1,1), (0,1,1) |
+| -Z   | (0, 0, -1) | (0,0,0), (0,1,0), (1,1,0), (1,0,0) |
 
 #### 3.5 UV Texture Mapping
 
@@ -714,7 +714,7 @@ These render from all angles without requiring rotation toward the camera.
 
 ### 4. Lighting System
 
-The lighting system uses a **discrete light level** model with values 0-15, combining sky light and block light.
+The lighting system uses a **discrete light level** model with values 0-15, combining skylight and block light.
 
 #### 4.1 Light Level Representation
 
@@ -726,7 +726,7 @@ Two separate light channels:
 - `skyLight[x,y,z]`: Light from the sky
 - `blockLight[x,y,z]`: Light from emissive blocks (torches, lava, etc.)
 
-#### 4.2 Sky Light Propagation Algorithm
+#### 4.2 Skylight Propagation Algorithm
 
 Uses **Breadth-First Search (BFS) flood fill** from exposed surfaces:
 
@@ -1055,10 +1055,10 @@ h(t) = ½|g|t² = 14.21t²
 
 | Time (s) | Distance (blocks) |
 |----------|-------------------|
-| 0.5 | 3.55 |
-| 1.0 | 14.21 |
-| 1.5 | 31.97 |
-| 2.0 | 56.84 |
+| 0.5      | 3.55              |
+| 1.0      | 14.21             |
+| 1.5      | 31.97             |
+| 2.0      | 56.84             |
 
 #### 5.8 Terminal Velocity
 
@@ -1242,14 +1242,14 @@ direction = (
 **Derivation:**
 Starting from forward vector (0, 0, -1):
 
-1. Apply pitch rotation (around X-axis):
+	1. Apply pitch rotation (around X-axis):
 ```
-[1    0         0    ] [0 ]   [0          ]
+[1    0         0   ] [0 ]   [0          ]
 [0  cos(p)  -sin(p) ] [0 ] = [-sin(p)    ]
 [0  sin(p)   cos(p) ] [-1]   [-cos(p)    ]
 ```
 
-2. Apply yaw rotation (around Y-axis):
+	2. Apply yaw rotation (around Y-axis):
 ```
 [cos(y)   0   sin(y)] [0      ]   [-sin(y)×cos(p)]
 [0        1   0     ] [-sin(p)] = [-sin(p)       ]
@@ -1332,7 +1332,7 @@ local = hit_point - floor(hit_point)
 
 #### 6.5 Face Detection for Block Placement
 
-Determine which face was hit by finding closest face to hit point:
+Determine which face was hit by finding the closest face to hit point:
 
 ```
 distances = [
@@ -1536,11 +1536,11 @@ B = 0 + 255 × mix = 255 × mix
 
 | Phase | Time Range (t) | Duration | Sky Brightness |
 |-------|----------------|----------|----------------|
-| Night | 0.00 - 0.175 | 7 min | 0.25-0.40 |
-| Dawn | 0.175 - 0.325 | 3 min | 0.40-0.90 |
-| Day | 0.325 - 0.675 | 7 min | 0.90-1.0-0.90 |
-| Dusk | 0.675 - 0.825 | 3 min | 0.90-0.40 |
-| Night | 0.825 - 1.00 | 3.5 min | 0.40-0.25 |
+| Night | 0.00 - 0.175   | 7 min    | 0.25-0.40      |
+| Dawn  | 0.175 - 0.325  | 3 min    | 0.40-0.90      |
+| Day   | 0.325 - 0.675  | 7 min    | 0.90-1.0-0.90  |
+| Dusk  | 0.675 - 0.825  | 3 min    | 0.90-0.40      |
+| Night | 0.825 - 1.00   | 3.5 min  | 0.40-0.25      |
 
 #### 8.6 Ambient Light Adjustment
 
@@ -1714,17 +1714,3 @@ spatial_hash(x, y, z, seed) = hash(seed + x×374761393 + y×668265263 + z×12741
 These prime multipliers create good bit mixing.
 
 ---
-
-### Summary Table
-
-| System | Key Mathematical Concepts |
-|--------|---------------------------|
-| **Perlin Noise** | Gradient interpolation, quintic fade, permutation hashing |
-| **Terrain** | fBm, domain warping, piecewise height functions, weighted blending |
-| **Caves** | 3D noise thresholding, absolute value for tunnels |
-| **Lighting** | BFS flood fill, exponential gamma, sinusoidal brightness |
-| **Physics** | Semi-implicit Euler, AABB intersection, exponential smoothing |
-| **Rendering** | Face culling, cross products, instanced geometry |
-| **Ray Casting** | DDA voxel traversal, parametric rays |
-| **Camera** | Rotation matrices, spherical coordinates, perspective projection |
-| **Day/Night** | Circular orbit, sinusoidal brightness, RGB interpolation |

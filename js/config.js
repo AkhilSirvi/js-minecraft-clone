@@ -1,11 +1,6 @@
 // config.js
 // All configurable game parameters in one place
 
-// ============================================
-// WORLD GENERATION
-// ============================================
-
-// Seed for procedural generation (change for different worlds)
 function seedToNumber(str) {
   if (!isNaN(str)) return Number(str);
   
@@ -16,7 +11,6 @@ function seedToNumber(str) {
   return hash;
 }
 export const SEED = seedToNumber('14897592187543434');
-// Terrain generation parameters
 export const TERRAIN = {
   scale: 0.01,           // horizontal noise scale (smaller = smoother terrain)
   octaves: 5,            // noise detail layers
@@ -27,7 +21,6 @@ export const TERRAIN = {
   seaLevel: 62,          // water level
 };
 
-// Cave generation parameters
 export const CAVES = {
   scale: 0.06,           // cave noise scale
   octaves: 3,            // cave noise layers
@@ -36,14 +29,12 @@ export const CAVES = {
   openToSurface: true,   // whether caves can open to surface
 };
 
-// Tree generation
 export const TREES = {
   probability: 0.04,     // chance per grass block to spawn tree (0-1)
   minHeight: 4,          // minimum tree trunk height
   maxHeight: 6,          // maximum tree trunk height
 };
 
-// Biome generation
 export const BIOMES = {
   temperatureScale: 0.0015,  // Large scale for temperature (latitude-like bands)
   humidityScale: 0.0025,     // Medium scale for humidity variation
@@ -54,7 +45,6 @@ export const BIOMES = {
   blendDistance: 16,         // Blocks for biome blending
 };
 
-// Ore generation - [minY, maxY, veinSize, rarity]
 export const ORES = {
   coal: { minY: -64, maxY: 128, veinSize: 6, rarity: 0.06 },
   iron: { minY: -64, maxY: 64, veinSize: 5, rarity: 0.06 },
@@ -62,26 +52,16 @@ export const ORES = {
   diamond: { minY: -64, maxY: 16, veinSize: 4, rarity: 0.005 },
 };
 
-// ============================================
-// RENDERING
-// ============================================
-
 export const RENDER = {
   viewDistance: 6,       // chunk render distance
-  maxLoadsPerFrame: 1,   // chunks to load per frame
   fov: 75,               // camera field of view
   nearClip: 0.1,         // near clipping plane
   farClip: 1000,         // far clipping plane
-  maxPixelRatio: 1.0,    // max device pixel ratio
-  showFPS: true,         // show FPS counter on screen
-  chunkHysteresis: 0,    // extra chunk margin before unloading
+  maxPixelRatio: 1.5,    // max device pixel ratio
+  smoothLighting: false,  // toggle smooth per-vertex lighting
   enableFrustumCulling: true,  // GPU frustum culling
   mergeGeometry: true,   // merge chunk geometry for fewer draw calls
 };
-
-// ============================================
-// PLAYER
-// ============================================
 
 export const PLAYER = {
   width: 0.6,            // player width in blocks
@@ -92,14 +72,12 @@ export const PLAYER = {
   blockreach: 4.5,      // how far the player can reach to interact with blocks
 };
 
-// ============================================
-// PHYSICS
-// ============================================
-
 export const PHYSICS = {
   gravity: -28.42,          // blocks/s² (negative = down)
   jumpSpeed: 8.436,          // initial jump velocity (blocks/s)
   terminalVelocity: -50, // max fall speed (blocks/s)
+  safeFallDistance: 3, // blocks you can fall without taking damage
+  fallDamageMultiplier: 1, // damage per block beyond safe fall distance
   
   // Movement
   maxSpeed: 4.317,           // max horizontal speed (blocks/s)
@@ -118,20 +96,12 @@ export const PHYSICS = {
   physicsFPS: 60,        // physics updates per second (60 is smooth enough)
 };
 
-// ============================================
-// CAMERA
-// ============================================
-
 export const CAMERA = {
   mouseSensitivity: 0.002,  // mouse look sensitivity
   thirdPersonDistance: 3,   // distance behind player in 3rd person
   thirdPersonHeight: 0.35,  // height offset (multiplied by player height)
   eyeHeight: 0.5,           // eye position (multiplied by player height)
 };
-
-// ============================================
-// DAY/NIGHT CYCLE
-// ============================================
 
 export const DAY_NIGHT = {
   cycleLength: 20 * 60,     // full day/night cycle (seconds) - 20 minutes
@@ -140,10 +110,10 @@ export const DAY_NIGHT = {
   nightLength: 7 * 60,      // night duration (seconds) - 7 minutes
   
 
-  skyDayColor: 0x78A7FF,         
+  skyDayColor: 0x9bbdfa,         
   skyDayHorizonColor: 0xB8D4FF,  
-  skyNightColor: 0x000811,       
-  skyNightHorizonColor: 0x0c1a35,
+  skyNightColor: 0x000000,       
+  skyNightHorizonColor: 0x122a5b,
   skyDawnColor: 0xFFA46E,        
   skyDuskColor: 0xFF7840,        
   skyDawnHorizonColor: 0xFF8C2A, 
@@ -163,21 +133,13 @@ export const DAY_NIGHT = {
   orbitDistance: 600,
 };
 
-// ============================================
-// VEGETATION COLORS
-// ============================================
-
 export const COLORS = {
-  grassTop: 0x68bf48,       // grass block top color
-  grassSide: 0x68bf48,      // grass block side color
-  leaves: 0x4aad3a,         // tree leaves color
-  tallGrass: 0x68bf48,      // tall grass color
+  grassTop: 0x77c05d,       // grass block top color
+  grassSide: 0x77c05d,      // grass block side color
+  leaves: 0x6bc24b,         // tree leaves color
+  tallGrass: 0x77c05d,      // tall grass color
   cactus: 0x3dc922,         // cactus color
 };
-
-// ============================================
-// DEBUG
-// ============================================
 
 export const DEBUG = {
   logChunkLoading: true,   // log chunk load/unload

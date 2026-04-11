@@ -4,17 +4,14 @@
 
 import { createPerlin } from './perlin.js';
 import { TERRAIN, CAVES, TREES, ORES as CONFIG_ORES, BIOMES } from './config.js';
+import { BLOCK } from '../data/blocks.js';
 
 export const CHUNK_SIZE = 16;
 export const MIN_Y = -64;
 export const MAX_Y = 319;
 export const HEIGHT = MAX_Y - MIN_Y + 1; // 384
 
-// Block IDs:
-// 0=air, 1=stone, 2=dirt, 3=grass, 4=water, 5=sand, 6=oak_log, 7=oak_leaves
-// 8=grass_snow (snowy grass), 9=gravel, 10=coal_ore, 11=iron_ore, 12=gold_ore, 13=diamond_ore
-// 14=bedrock, 15=clay, 16=red_sand, 17=snow, 18=ice, 19=cactus
-// 20=dead_bush, 21=tall_grass, 22=rose_bush, 23=sunflower
+// Block IDs and properties are centralized in data/blocks.js.
 
 // Biome IDs
 const BIOME = {
@@ -136,13 +133,6 @@ function getBiomeTerrainScaleBase(biome) {
   }
 }
 
-// Get terrain amplitude multiplier based on biome with erosion factor
-function getBiomeTerrainScale(biome, erosion) {
-  const baseScale = getBiomeTerrainScaleBase(biome);
-  // Erosion reduces terrain height variation
-  return baseScale * lerp(1.0, 0.4, erosion);
-}
-
 // Get base height offset for a biome (used for blending)
 function getBiomeHeightOffset(biome) {
   switch (biome) {
@@ -163,32 +153,32 @@ function getBiomeHeightOffset(biome) {
 function getSurfaceBlock(biome, underwater) {
   if (underwater) {
     switch (biome) {
-      case BIOME.DESERT: return 16; // red_sand
-      case BIOME.SWAMP: return 15;  // clay
-      case BIOME.OCEAN: return 9;   // gravel (deep ocean)
-      default: return 5; // sand
+      case BIOME.DESERT: return BLOCK.RED_SAND;
+      case BIOME.SWAMP: return BLOCK.CLAY;
+      case BIOME.OCEAN: return BLOCK.GRAVEL;
+      default: return BLOCK.SAND;
     }
   }
   switch (biome) {
-    case BIOME.DESERT: return 5; // sand
-    case BIOME.BEACH: return 5; // sand
-    case BIOME.SNOWY: return 8; // snow grass
-    case BIOME.SWAMP: return 3; // grass
-    case BIOME.SAVANNA: return 3; // grass
-    case BIOME.MOUNTAINS: return 3; // grass (stone at high altitude handled separately)
-    case BIOME.PLAINS: return 3; // grass
-    case BIOME.FOREST: return 3; // grass
-    default: return 3; // grass
+    case BIOME.DESERT: return BLOCK.SAND;
+    case BIOME.BEACH: return BLOCK.SAND;
+    case BIOME.SNOWY: return BLOCK.GRASS_SNOW;
+    case BIOME.SWAMP: return BLOCK.GRASS;
+    case BIOME.SAVANNA: return BLOCK.GRASS;
+    case BIOME.MOUNTAINS: return BLOCK.GRASS;
+    case BIOME.PLAINS: return BLOCK.GRASS;
+    case BIOME.FOREST: return BLOCK.GRASS;
+    default: return BLOCK.GRASS;
   }
 }
 
 // Get subsurface block for biome
 function getSubsurfaceBlock(biome, depth) {
   switch (biome) {
-    case BIOME.DESERT: return depth < 4 ? 5 : 1; // sand then stone
-    case BIOME.BEACH: return depth < 3 ? 5 : 2; // sand then dirt
-    case BIOME.SWAMP: return depth < 2 ? 15 : 2; // clay then dirt
-    default: return 2; // dirt
+    case BIOME.DESERT: return depth < 4 ? BLOCK.SAND : BLOCK.STONE;
+    case BIOME.BEACH: return depth < 3 ? BLOCK.SAND : BLOCK.DIRT;
+    case BIOME.SWAMP: return depth < 2 ? BLOCK.CLAY : BLOCK.DIRT;
+    default: return BLOCK.DIRT;
   }
 }
 
@@ -228,10 +218,10 @@ function getBiomeTreeDensity(biome) {
 // Convert config ORES (named) into the internal array format.
 // Mapping from config ore names to block IDs used in this generator.
 const ORE_NAME_TO_ID = {
-  coal: 10,
-  iron: 11,
-  gold: 12,
-  diamond: 13,
+  coal: BLOCK.COAL_ORE,
+  iron: BLOCK.IRON_ORE,
+  gold: BLOCK.GOLD_ORE,
+  diamond: BLOCK.DIAMOND_ORE,
 };
 
 let ORES = [];
@@ -246,10 +236,10 @@ if (CONFIG_ORES && typeof CONFIG_ORES === 'object') {
 // Fallback default ores if config didn't provide any
 if (ORES.length === 0) {
   ORES = [
-    [10, -64, 128, 12, 0.08],  // coal
-    [11, -64, 64, 8, 0.06],    // iron
-    [12, -64, 32, 6, 0.015],   // gold
-    [13, -64, 16, 4, 0.005],   // diamond
+    [BLOCK.COAL_ORE, -64, 128, 12, 0.08],
+    [BLOCK.IRON_ORE, -64, 64, 8, 0.06],
+    [BLOCK.GOLD_ORE, -64, 32, 6, 0.015],
+    [BLOCK.DIAMOND_ORE, -64, 16, 4, 0.005],
   ];
 }
 
@@ -625,7 +615,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       
       for (let y = MIN_Y; y <= maxFillY; y++) {
         const dataIdx = colBase + (y - MIN_Y);
-        let placedId = 0;
+        let placedId = BLOCK.AIR;
         const depthFromSurface = height - y;
 
         if (y <= height) {
@@ -633,7 +623,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
           if (y <= MIN_Y + 4) {
             const bedrockChance = (MIN_Y + 5 - y) / 5;
             if (seededRandom(worldX, worldZ + y * 1000, seed) < bedrockChance) {
-              placedId = 14; // bedrock
+              placedId = BLOCK.BEDROCK;
               data[dataIdx] = placedId;
               continue;
             }
@@ -649,7 +639,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
           }
           // Stone layer
           else {
-            placedId = 1; // stone
+            placedId = BLOCK.STONE;
             
             // Ore generation
             for (const [oreId, minY, maxY, veinSize, rarity] of ORES) {
@@ -669,7 +659,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
           }
 
           // Cave carving
-          if (placedId !== 14 && y <= caveMaxY && (caveOpenToSurface || depthFromSurface >= 3)) {
+          if (placedId !== BLOCK.BEDROCK && y <= caveMaxY && (caveOpenToSurface || depthFromSurface >= 3)) {
             // Main cave system
             const cn = perlin.octaveNoise(caveNoiseX, y * caveScaleYFactor, caveNoiseZ, caveOctaves, 0.5, 2.0);
             
@@ -688,16 +678,16 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
             if (caveValue > caveThreshold || (spaghetti && y < seaLevel - 5)) {
               // Don't carve caves that would flood from water
               if (y > seaLevel || height > seaLevel) {
-                placedId = 0;
+                placedId = BLOCK.AIR;
               }
             }
           }
         } else if (y <= seaLevel) {
           // Water or ice above terrain but below sea level
           if (biome === BIOME.SNOWY && y === seaLevel) {
-            placedId = 18; // ice on top
+            placedId = BLOCK.ICE;
           } else {
-            placedId = 4; // water
+            placedId = BLOCK.WATER;
           }
         }
 
@@ -708,7 +698,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       if (biome === BIOME.SNOWY && height > seaLevel) {
         const snowIdx = colBase + (height + 1 - MIN_Y);
         if (snowIdx < size) {
-          data[snowIdx] = 17; // snow layer
+          data[snowIdx] = BLOCK.SNOW;
         }
       }
     }
@@ -862,7 +852,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
     }
 
     const climate = computeClimateAt(wx, wz);
-    const { continentalness, erosion, continentHeight, biome } = climate;
+    const {continentHeight} = climate;
     
     // Base terrain noise
     const noiseX = wx * scale;
@@ -1011,7 +1001,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       const colBase = (localX * CHUNK_SIZE + localZ) * HEIGHT;
       for (let ty = 1; ty <= treeHeight; ty++) {
         const trunkIdx = colBase + (height + ty - MIN_Y);
-        if (trunkIdx < size) data[trunkIdx] = 6; // wood
+        if (trunkIdx < size) data[trunkIdx] = BLOCK.WOOD;
       }
     }
     
@@ -1054,12 +1044,12 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
               const leafColBase = (leafLocalX * CHUNK_SIZE + leafLocalZ) * HEIGHT;
               const leafIdx = leafColBase + (leafY - MIN_Y);
               
-              if (leafIdx >= 0 && leafIdx < size && data[leafIdx] === 0) {
+              if (leafIdx >= 0 && leafIdx < size && data[leafIdx] === BLOCK.AIR) {
                 const actualTerrainHeight = getHeightAt(leafWorldX, leafWorldZ);
                 if (leafY > actualTerrainHeight) {
                   const leafRand = hash3(leafWorldX, leafY, leafWorldZ);
                   if (leafRand > 0.12) {
-                    data[leafIdx] = 7; // leaves
+                    data[leafIdx] = BLOCK.LEAVES;
                   }
                 }
               }
@@ -1086,7 +1076,7 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       const surfaceIdx = colBase + (height - MIN_Y);
       const surfaceBlock = data[surfaceIdx];
       
-      if (surfaceBlock !== 5) continue; // Only on sand
+      if (surfaceBlock !== BLOCK.SAND) continue;
       
       const cactusRand = seededRandom(worldX, worldZ, seed + 5000);
       const localDensity = vegetationDensityCache[idx];
@@ -1095,11 +1085,11 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
         const cactusHeight = 1 + Math.floor(seededRandom(worldX, worldZ, seed + 5001) * 3);
         for (let cy = 1; cy <= cactusHeight; cy++) {
           const cactusIdx = colBase + (height + cy - MIN_Y);
-          if (cactusIdx < size) data[cactusIdx] = 19; // cactus
+          if (cactusIdx < size) data[cactusIdx] = BLOCK.CACTUS;
         }
       } else if (cactusRand < 0.035 * localDensity) {
         const bushIdx = colBase + (height + 1 - MIN_Y);
-        if (bushIdx < size) data[bushIdx] = 20; // dead_bush
+        if (bushIdx < size) data[bushIdx] = BLOCK.DEAD_BUSH;
       }
     }
   }
@@ -1123,10 +1113,10 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
       const surfaceBlock = data[surfaceIdx];
       
       // Only on grass (snow biome gets less vegetation)
-      if (surfaceBlock !== 3 && surfaceBlock !== 8) continue;
+      if (surfaceBlock !== BLOCK.GRASS && surfaceBlock !== BLOCK.GRASS_SNOW) continue;
       
       const aboveIdx = colBase + (height + 1 - MIN_Y);
-      if (aboveIdx >= size || data[aboveIdx] !== 0) continue; // Already occupied
+      if (aboveIdx >= size || data[aboveIdx] !== BLOCK.AIR) continue;
       
       // Get vegetation density from noise and biome
       const localVegDensity = vegetationDensityCache[idx];
@@ -1151,46 +1141,46 @@ export function generateChunk(chunkX, chunkZ, seed = 0, opts = {}) {
         if (biome === BIOME.SNOWY) {
           // Snow biome: mostly nothing, occasional dead grass
           if (typeRand < 0.3) {
-            data[aboveIdx] = 21; // tall_grass (sparse)
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           }
         } else if (biome === BIOME.SWAMP) {
           // Swamp: lots of tall grass, some flowers
           if (typeRand < 0.85) {
-            data[aboveIdx] = 21; // tall_grass
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           } else {
-            data[aboveIdx] = 22; // rose_bush
+            data[aboveIdx] = BLOCK.ROSE_BUSH;
           }
         } else if (biome === BIOME.FOREST) {
           // Forest: mixed vegetation
           if (typeRand < 0.65) {
-            data[aboveIdx] = 21; // tall_grass
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           } else if (typeRand < 0.85) {
-            data[aboveIdx] = 22; // rose_bush
+            data[aboveIdx] = BLOCK.ROSE_BUSH;
           } else {
-            data[aboveIdx] = 23; // sunflower
+            data[aboveIdx] = BLOCK.SUNFLOWER;
           }
         } else if (biome === BIOME.SAVANNA) {
           // Savanna: mostly tall dry grass
           if (typeRand < 0.92) {
-            data[aboveIdx] = 21; // tall_grass
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           } else {
-            data[aboveIdx] = 20; // dead_bush
+            data[aboveIdx] = BLOCK.DEAD_BUSH;
           }
         } else if (biome === BIOME.PLAINS) {
           // Plains: nice mix of grass and flowers
           if (typeRand < 0.60) {
-            data[aboveIdx] = 21; // tall_grass
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           } else if (typeRand < 0.80) {
-            data[aboveIdx] = 22; // rose_bush  
+            data[aboveIdx] = BLOCK.ROSE_BUSH;
           } else {
-            data[aboveIdx] = 23; // sunflower
+            data[aboveIdx] = BLOCK.SUNFLOWER;
           }
         } else {
           // Default: mostly grass
           if (typeRand < 0.75) {
-            data[aboveIdx] = 21; // tall_grass
+            data[aboveIdx] = BLOCK.TALL_GRASS;
           } else {
-            data[aboveIdx] = 22; // rose_bush
+            data[aboveIdx] = BLOCK.ROSE_BUSH;
           }
         }
       }

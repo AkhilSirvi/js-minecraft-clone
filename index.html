@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>MineCraft Clone in JS</title>
     <meta name="description" content="A simple Minecraft clone built with JavaScript"/>
-    <link rel="shortcut icon" href="assets/textures/block/oak_log.png" type="image/x-icon"/>
+    <link rel="shortcut icon" href="assets/textures/block/grass_block_side.png" type="image/x-icon"/>
     <style>
       html,body {
         margin: 0;
@@ -38,7 +38,7 @@
       #crosshair:before {
         left: 50%;
         top: 0;
-        width: 1.5px;
+        width: 2px;
         height: 100%;
         transform: translateX(-50%);
       }
@@ -46,7 +46,7 @@
         top: 50%;
         left: 0;
         width: 100%;
-        height: 1.5px;
+        height: 2px;
         transform: translateY(-50%);
       }
 
@@ -161,9 +161,6 @@
         display: none;
       }
 
-      #loading-text.visible {
-        display: block;
-      }
 
       @keyframes pulse {
         0%, 100% { opacity: 0.6; }
@@ -334,7 +331,7 @@
         right: 10px;
         font-size: 10px;
         color: rgba(255, 255, 255, 0.6);
-        z-index: 10002;
+        z-index: 1;
         font-family: Arial, sans-serif;
       }
     </style>
@@ -379,13 +376,6 @@
             <div class="setting-control">
               <input type="range" id="setting-fov" min="60" max="110" value="75">
               <span class="setting-value" id="fov-value">75°</span>
-            </div>
-          </div>
-          
-          <div class="setting-row">
-            <span class="setting-label">Show FPS</span>
-            <div class="setting-control">
-              <input type="checkbox" id="setting-show-fps" checked>
             </div>
           </div>
         </div>

@@ -1,19 +1,20 @@
 import { CHUNK_SIZE, HEIGHT, MIN_Y, MAX_Y } from './chunkGen.js';
+import {
+  BLOCK,
+  LIGHT_TRANSPARENT_BLOCK_IDS,
+  LIGHT_FILTERING_BLOCK_IDS,
+  getAllLightEmitters,
+} from '../data/blocks.js';
 
 // Light-emitting blocks and their light levels
-export const LIGHT_EMITTING_BLOCKS = {
-  // ID: light level
-  // Currently just placeholders - add more as needed
-  // 4: 0,  // Water doesn't emit light but could have special handling
-};
+const LIGHT_EMITTERS = getAllLightEmitters();
+
+export const LIGHT_EMITTING_BLOCKS = Object.fromEntries(LIGHT_EMITTERS);
 
 // Check if any light-emitting blocks exist
-const HAS_LIGHT_EMITTERS = Object.keys(LIGHT_EMITTING_BLOCKS).length > 0;
+const HAS_LIGHT_EMITTERS = LIGHT_EMITTERS.size > 0;
 
-const BLOCK_AIR = 0;
-const BLOCK_WATER = 4;
-const BLOCK_LEAVES = 7;
-const BLOCK_ICE = 18;
+const BLOCK_AIR = BLOCK.AIR;
 
 // Pre-computed lookup tables for fast block property checks (max block ID 256)
 const TRANSPARENT_LOOKUP = new Uint8Array(256);
@@ -21,18 +22,29 @@ const LIGHT_FILTERING_LOOKUP = new Uint8Array(256);
 const LIGHT_EMISSION_LOOKUP = new Uint8Array(256);
 
 // Initialize transparent blocks lookup
-[BLOCK_AIR, BLOCK_WATER, BLOCK_LEAVES, BLOCK_ICE, 17, 20, 21, 22, 23].forEach(id => {
-  TRANSPARENT_LOOKUP[id] = 1;
+LIGHT_TRANSPARENT_BLOCK_IDS.forEach((id) => {
+  if (id >= 0 && id < TRANSPARENT_LOOKUP.length) {
+    TRANSPARENT_LOOKUP[id] = 1;
+  }
 });
 
 // Initialize light-filtering blocks lookup
-[BLOCK_WATER, BLOCK_LEAVES, BLOCK_ICE].forEach(id => {
-  LIGHT_FILTERING_LOOKUP[id] = 1;
+LIGHT_FILTERING_BLOCK_IDS.forEach((id) => {
+  if (id >= 0 && id < LIGHT_FILTERING_LOOKUP.length) {
+    LIGHT_FILTERING_LOOKUP[id] = 1;
+  }
 });
 
 // Initialize light emission lookup
-for (const [id, level] of Object.entries(LIGHT_EMITTING_BLOCKS)) {
-  LIGHT_EMISSION_LOOKUP[parseInt(id)] = level;
+for (const [id, level] of LIGHT_EMITTERS.entries()) {
+  if (id >= 0 && id < LIGHT_EMISSION_LOOKUP.length) {
+    LIGHT_EMISSION_LOOKUP[id] = level;
+  }
+}
+
+// Ensure air is always transparent even if data is edited incorrectly.
+if (BLOCK_AIR >= 0 && BLOCK_AIR < TRANSPARENT_LOOKUP.length) {
+  TRANSPARENT_LOOKUP[BLOCK_AIR] = 1;
 }
 
 // Direction offsets for 6-connectivity (pre-computed)
@@ -312,7 +324,7 @@ function getDayBrightness(timeOfDay) {
  */
 export function lightToRenderBrightness(lightLevel) {
   const normalizedLevel = Math.max(0, Math.min(15, lightLevel)) / 15;
-  const minBrightness = 0.05; // 5% at level 0
+  const minBrightness = 0.1; // 20% at level 0
   const maxBrightness = 1.0;  // 100% at level 15
   const brightness = minBrightness * Math.pow(maxBrightness / minBrightness, normalizedLevel);
   return brightness;

@@ -1,5 +1,4 @@
 import * as THREE from './three.module.js';
-import { CHUNK_SIZE, HEIGHT, MIN_Y } from './chunkGen.js';
 
 export const WATER_CONFIG = {
   maxFlowDistance: 7,        // Water spreads 7 blocks horizontally from source
@@ -54,9 +53,7 @@ export class WaterBlock {
     this.z = z;
     this.level = level;           // Water level (0-7, 7=source)
     this.isSource = level === WATER_CONFIG.sourceLevel;
-    this.flowing = !this.isSource && level > 0;
     this.isFalling = false;
-    this.needsUpdate = true;
     this.flowDirection = new THREE.Vector3(0, 0, 0); // Direction of current
     this.mesh = null;
     this.scheduledRemoval = false;
@@ -145,11 +142,8 @@ export class WaterPhysics {
     this.scene = scene;
     this.waterBlocks = new Map();
     this.updateQueue = [];
-    this.tickAccumulator = 0;
-    this.lastUpdate = Date.now();
 
     this.flowTickTimer = 0;
-    this.ticksPerSecond = 20;
     
     // Water materials
     this.materials = this.createWaterMaterials();
@@ -162,13 +156,6 @@ export class WaterPhysics {
     this.playerBreath = WATER_CONFIG.breathDuration;
     this.drowningTimer = 0;
     this.isPlayerSubmerged = false; // Head underwater
-    this.lastDrowningDamage = 0;
-    
-    // Entity tracking for water physics
-    this.entitiesInWater = new Set();
-    
-    // Fall damage prevention tracking
-    this.wasInWaterLastFrame = false;
   }
   
   createWaterMaterials() {
@@ -194,8 +181,6 @@ export class WaterPhysics {
       flowTexture.repeat.set(1, 1 / 32);
       
       // Store frame count for animation
-      this.stillFrameCount = 32;
-      this.flowFrameCount = 32;
       this.animationFrame = 0;
       this.animationTimer = 0;
       
@@ -345,11 +330,9 @@ export class WaterPhysics {
     }
     
     // Check if neighbor is a solid block
-    if (!this.isPassableBlock(nx, ny, nz)) {
-      return false; // Don't render face adjacent to solid block
-    }
+    return this.isPassableBlock(nx, ny, nz);
     
-    return true; // Render face (adjacent to air)
+     // Render face (adjacent to air)
   }
   
   createWaterGeometry(waterBlock) {
@@ -636,21 +619,6 @@ export class WaterPhysics {
     }
   }
   
-  canFlowDown(waterBlock) {
-    try {
-      const below = this.getWater(waterBlock.x, waterBlock.y - 1, waterBlock.z);
-      if (below) {
-        return false; // Already water below
-      }
-      
-      // Check if block below is passable (air or similar)
-      return this.isPassableBlock(waterBlock.x, waterBlock.y - 1, waterBlock.z);
-    } catch (error) {
-      console.error('Error in canFlowDown:', error);
-      return false;
-    }
-  }
-  
   flowDown(waterBlock) {
     try {
       if (!this.isPassableBlock(waterBlock.x, waterBlock.y - 1, waterBlock.z)) {
@@ -785,102 +753,12 @@ export class WaterPhysics {
     return 1000; // No drop found
   }
   
-  // Legacy horizontal flow method (kept for reference)
-  flowHorizontally(waterBlock) {
-    try {
-      if (!waterBlock) {
-        return;
-      }
-      
-      // Water needs at least level 2 to spread (level 1 is minimum, won't spread)
-      if (waterBlock.level <= WATER_CONFIG.minFlowLevel) {
-        return;
-      }
-      
-      const horizontalOffsets = [
-        [1, 0, 0, '+X'], [-1, 0, 0, '-X'],
-        [0, 0, 1, '+Z'], [0, 0, -1, '-Z'],
-      ];
-      
-      // Next level of water will be 1 less (unless it's a source)
-      const nextLevel = waterBlock.isSource ? WATER_CONFIG.sourceLevel - 1 : waterBlock.level - 1;
-      
-      if (nextLevel < WATER_CONFIG.minFlowLevel) {
-        return;
-      }
-      
-      for (const [dx, dy, dz, dir] of horizontalOffsets) {
-        const nx = waterBlock.x + dx;
-        const ny = waterBlock.y;
-        const nz = waterBlock.z + dz;
-        
-        // Check if neighbor position is passable
-        if (!this.isPassableBlock(nx, ny, nz)) {
-          continue;
-        }
-        
-        const neighbor = this.getWater(nx, ny, nz);
-        const key = `${nx},${ny},${nz}`;
-        
-        // Place or update water
-        if (!neighbor) {
-          // Create new flowing water with decreased level
-          const newWater = new WaterBlock(nx, ny, nz, nextLevel);
-          this.waterBlocks.set(key, newWater);
-          this.createWaterMesh(newWater);
-        } else if (!neighbor.isSource && neighbor.level < nextLevel) {
-          // Update existing water if new level is higher
-          neighbor.setLevel(nextLevel);
-          this.updateWaterMesh(neighbor);
-        }
-      }
-    } catch (error) {
-      console.error('Error in flowHorizontally:', error);
-    }
-  }
-  
-  calculateFlowLevel(x, y, z) {
-    let minDistance = WATER_CONFIG.maxFlowDistance + 1;
-    
-    for (const waterBlock of this.waterBlocks.values()) {
-      if (waterBlock.isSource && waterBlock.y === y) {
-        const distance = Math.abs(waterBlock.x - x) + Math.abs(waterBlock.z - z);
-        if (distance < minDistance) {
-          minDistance = distance;
-        }
-      }
-    }
-    
-    // Level decreases by 1 for each block distance from source
-    const level = WATER_CONFIG.sourceLevel - minDistance;
-    return Math.max(0, level);
-  }
   
   hasWaterAbove(x, y, z) {
     const above = this.getWater(x, y + 1, z);
     return above && above.level > 0;
   }
   
-  hasHigherNeighbor(waterBlock) {
-    const offsets = [
-      [1, 0, 0], [-1, 0, 0],
-      [0, 0, 1], [0, 0, -1],
-    ];
-    
-    for (const [dx, dz] of offsets) {
-      const neighbor = this.getWater(
-        waterBlock.x + dx,
-        waterBlock.y,
-        waterBlock.z + dz
-      );
-      
-      if (neighbor && neighbor.level > waterBlock.level + 1) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
   
   isPassableBlock(x, y, z) {
     try {
@@ -946,57 +824,7 @@ export class WaterPhysics {
     
     this.particles.push(particle);
   }
-  
-  spawnBubbleParticle(x, y, z) {
-    if (this.particles.length >= this.maxParticles) return;
-    
-    const particle = {
-      type: 'bubble',
-      position: new THREE.Vector3(
-        x + Math.random(),
-        y + Math.random(),
-        z + Math.random()
-      ),
-      velocity: new THREE.Vector3(
-        (Math.random() - 0.5) * 0.1,
-        0.2,
-        (Math.random() - 0.5) * 0.1
-      ),
-      life: 3.0,
-      maxLife: 3.0,
-    };
-    
-    this.particles.push(particle);
-  }
-  
-  updateParticles(deltaTime) {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const particle = this.particles[i];
-      
-      // Update position
-      particle.position.add(
-        particle.velocity.clone().multiplyScalar(deltaTime)
-      );
-      
-      // Update life
-      particle.life -= deltaTime;
-      
-      // Remove dead particles
-      if (particle.life <= 0) {
-        this.particles.splice(i, 1);
-      }
-    }
-    
-    // Spawn new particles
-    if (Math.random() < WATER_CONFIG.particleSpawnRate * deltaTime) {
-      for (const waterBlock of this.waterBlocks.values()) {
-        if (this.hasWaterAbove(waterBlock.x, waterBlock.y, waterBlock.z)) {
-          this.spawnDripParticle(waterBlock.x, waterBlock.y, waterBlock.z);
-          break;
-        }
-      }
-    }
-  }
+
   
   // ============================================
   // PLAYER INTERACTION
@@ -1041,132 +869,6 @@ export class WaterPhysics {
       return new THREE.Vector3(0, 0, 0);
     }
     return waterBlock.flowDirection.clone();
-  }
-
-  applyWaterPhysics(velocity, playerPosition, inputState = {}) {
-    const inWater = this.isPlayerInWater(playerPosition);
-    
-    if (!inWater) {
-      // Track for fall damage prevention
-      this.wasInWaterLastFrame = false;
-      return velocity;
-    }
-    
-    // Mark that we're in water (for fall damage prevention)
-    this.wasInWaterLastFrame = true;
-    
-    const isSwimming = inputState.forward || inputState.jump;
-    const isSneaking = inputState.crouch;
-
-    velocity.multiplyScalar(WATER_CONFIG.drag);
-    
-    // Apply swim speed reduction to horizontal movement
-    velocity.x *= WATER_CONFIG.swimSpeed;
-    velocity.z *= WATER_CONFIG.swimSpeed;
-    
-    // Get water current and apply pushing force
-    const current = this.getWaterCurrentAt(playerPosition);
-    if (current.lengthSq() > 0) {
-      velocity.x += current.x * WATER_CONFIG.currentStrength;
-      velocity.z += current.z * WATER_CONFIG.currentStrength;
-      
-      // Downward current
-      if (current.y < 0) {
-        velocity.y += current.y * WATER_CONFIG.currentStrength;
-      }
-    }
-    
-    // Handle vertical movement
-    if (inputState.jump) {
-      // Swimming up - apply buoyancy
-      velocity.y += WATER_CONFIG.swimBuoyancy;
-    } else if (isSneaking) {
-      // Sinking faster when sneaking
-      velocity.y -= WATER_CONFIG.sinkSpeed * 2;
-    } else {
-      // Natural sinking
-      velocity.y -= WATER_CONFIG.sinkSpeed;
-    }
-    
-    // Clamp vertical velocity in water
-    if (velocity.y < -WATER_CONFIG.currentSpeed) {
-      velocity.y = -WATER_CONFIG.currentSpeed;
-    }
-    if (velocity.y > WATER_CONFIG.buoyancy * 10) {
-      velocity.y = WATER_CONFIG.buoyancy * 10;
-    }
-    
-    return velocity;
-  }
-  
-  // Update player breath and drowning (call every frame)
-  updatePlayerBreath(deltaTime, playerPosition, eyeHeight = 1.62) {
-    const wasSubmerged = this.isPlayerSubmerged;
-    this.isPlayerSubmerged = this.isPlayerHeadSubmerged(playerPosition, eyeHeight);
-    
-    if (this.isPlayerSubmerged) {
-      // Decrease breath
-      this.playerBreath -= deltaTime;
-      
-      if (this.playerBreath <= 0) {
-        // Drowning!
-        this.drowningTimer += deltaTime;
-        
-        // Deal damage every drowningInterval seconds
-        if (this.drowningTimer >= WATER_CONFIG.drowningInterval) {
-          this.drowningTimer = 0;
-          return {
-            isDrowning: true,
-            damage: WATER_CONFIG.drowningDamage,
-            breath: 0,
-            maxBreath: WATER_CONFIG.breathDuration
-          };
-        }
-      }
-    } else {
-      this.playerBreath = WATER_CONFIG.breathDuration;
-      this.drowningTimer = 0;
-    }
-    
-    return {
-      isDrowning: false,
-      damage: 0,
-      breath: Math.max(0, this.playerBreath),
-      maxBreath: WATER_CONFIG.breathDuration,
-      isSubmerged: this.isPlayerSubmerged
-    };
-  }
-  
-  // Check if fall damage should be prevented (player landed in water)
-  shouldPreventFallDamage(playerPosition) {
-    if (!WATER_CONFIG.preventsFallDamage) return false;
-    return this.isPlayerInWater(playerPosition);
-  }
-  
-  // Get mining speed multiplier when in water
-  getMiningSpeedMultiplier(playerPosition, isOnGround) {
-    if (!this.isPlayerHeadSubmerged(playerPosition)) {
-      return 1.0; // Not submerged, normal speed
-    }
-    if (isOnGround) {
-      return WATER_CONFIG.miningSpeedMultiplierGround;
-    }
-    return WATER_CONFIG.miningSpeedMultiplierFloating;
-  }
-  
-  getWaterDragMultiplier() {
-    return WATER_CONFIG.drag;
-  }
-  getSwimModeState(playerPosition, inputState = {}) {
-    const headSubmerged = this.isPlayerHeadSubmerged(playerPosition);
-    const fullySubmerged = this.isPlayerInWater(playerPosition) && headSubmerged;
-    const isSprinting = inputState.sprint && inputState.forward;
-    return {
-      inSwimMode: fullySubmerged && isSprinting,
-      fullySubmerged,
-      headSubmerged,
-      canSwim: this.isPlayerInWater(playerPosition)
-    };
   }
   
   dispose() {

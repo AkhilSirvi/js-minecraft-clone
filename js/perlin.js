@@ -87,5 +87,5 @@ export function createPerlin(seed = SEED) {
     return total / max;
   }
 
-  return { noise3, octaveNoise };
+  return { octaveNoise };
 }

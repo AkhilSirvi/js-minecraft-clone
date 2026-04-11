@@ -5,7 +5,6 @@ import {RENDER, CAMERA} from './config.js';
 export const gameSettings = {
   viewDistance: RENDER.viewDistance,
   fov: RENDER.fov,
-  showFPS: RENDER.showFPS,
   mouseSensitivity: CAMERA.mouseSensitivity,
   volume: 1.0
 };
@@ -50,7 +49,6 @@ export function initMenu() {
   const viewDistanceValue = document.getElementById('view-distance-value');
   const fovInput = document.getElementById('setting-fov');
   const fovValue = document.getElementById('fov-value');
-  const showFpsInput = document.getElementById('setting-show-fps');
   const sensitivityInput = document.getElementById('setting-sensitivity');
   const sensitivityValue = document.getElementById('sensitivity-value');
   const volumeInput = document.getElementById('setting-volume');
@@ -65,7 +63,6 @@ export function initMenu() {
     viewDistanceValue.textContent = gameSettings.viewDistance;
     fovInput.value = gameSettings.fov;
     fovValue.textContent = gameSettings.fov + '°';
-    showFpsInput.checked = gameSettings.showFPS;
     // Convert sensitivity back to slider value (0.001-0.004 -> 1-20)
     const sensSlider = Math.round((gameSettings.mouseSensitivity - 0.0005) / 0.00025);
     sensitivityInput.value = Math.max(1, Math.min(20, sensSlider));
@@ -88,8 +85,6 @@ export function initMenu() {
   settingsSave.addEventListener('click', () => {
     gameSettings.viewDistance = parseInt(viewDistanceInput.value);
     gameSettings.fov = parseInt(fovInput.value);
-    gameSettings.showFPS = showFpsInput.checked;
-    // Convert slider (1-20) to sensitivity (0.00075-0.005)
     gameSettings.mouseSensitivity = 0.0005 + (parseInt(sensitivityInput.value) * 0.00025);
     gameSettings.volume = parseInt(volumeInput.value) / 100;
     
