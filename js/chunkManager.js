@@ -100,10 +100,16 @@ export default class ChunkManager {
     this._lastLoadQueueCleanupLogAt = 0;
     this._lastFinalizationCleanupLogAt = 0;
     this._lastPendingCancelLogAt = 0;
-    // Worker for chunk generation to avoid main-thread spikes
+    this._workerRestartCancelThreshold = options.workerRestartCancelThreshold ?? 24;
+    this._chunkWorker = null;
+    this._pendingRequests = new Map(); // key -> { key, cx, cz, priority }
+    this._initChunkWorker();
+  }
+
+  _initChunkWorker() {
+    if (this._chunkWorker) return true;
     try {
       this._chunkWorker = new Worker('js/chunkWorker.js', { type: 'module' });
-      this._pendingRequests = new Map(); // key -> { key, cx, cz, priority }
       this._chunkWorker.onmessage = (e) => {
         const msg = e.data;
         if (msg && msg.error) {
@@ -121,7 +127,7 @@ export default class ChunkManager {
           const dz = msg.cz - this._playerChunkZ;
           const distanceSquared = dx * dx + dz * dz;
           const maxDistanceSquared = this.viewDistance * this.viewDistance;
-          
+
           if (distanceSquared > maxDistanceSquared) {
             return; // Skip finalization entirely - save all the work!
           }
@@ -136,11 +142,32 @@ export default class ChunkManager {
         // Queue for finalization instead of immediate processing to avoid lag spikes
         this._finalizationQueue.push({ chunk, cx: pending.cx, cz: pending.cz, meta: pending });
       };
+      return true;
     } catch (e) {
       // Worker not supported or failed to construct — fall back to main-thread generation
       this._chunkWorker = null;
-      this._pendingRequests = new Map();
+      return false;
     }
+  }
+
+  _restartChunkWorker(reason = '') {
+    if (!this._chunkWorker) return false;
+    try {
+      this._chunkWorker.terminate();
+    } catch (e) {
+      // Ignore termination errors
+    }
+    this._chunkWorker = null;
+    this._pendingRequests.clear();
+    const restarted = this._initChunkWorker();
+    if (DEBUG.logChunkLoading) {
+      const msg = restarted
+        ? `Restarted chunk worker (${reason || 'stale request cleanup'})`
+        : `Chunk worker restart failed (${reason || 'stale request cleanup'})`;
+      console.log(`ChunkManager: ${msg}`);
+      if (this._debugOverlay) this._debugOverlay.pushMessage(msg, { duration: 2400 });
+    }
+    return restarted;
   }
 
   // Compute a deterministic 0..3 rotation for a block at global block coords
@@ -1374,6 +1401,10 @@ export default class ChunkManager {
       
       for (const key of pendingToCancel) {
         this._pendingRequests.delete(key);
+      }
+
+      if (pendingToCancel.length >= this._workerRestartCancelThreshold) {
+        this._restartChunkWorker(`cancelled ${pendingToCancel.length} stale requests`);
       }
       
       if (DEBUG.logChunkLoading && pendingToCancel.length > 0) {

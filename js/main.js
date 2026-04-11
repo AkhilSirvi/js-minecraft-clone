@@ -700,6 +700,9 @@ export function main() {
     }
 
     cm.update(nx, nz);
+    if (typeof cm.processLoadQueue === "function") {
+      cm.processLoadQueue();
+    }
 
     let ny;
     if (y === undefined || y === null || isNaN(Number(y))) {
