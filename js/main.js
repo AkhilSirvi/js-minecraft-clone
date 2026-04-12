@@ -840,6 +840,7 @@ export function main() {
   const loadingStartedAt = performance.now();
   const MIN_LOADING_VISIBLE_MS = 4800;
   const READY_HOLD_MS = 700;
+  const MAX_LOADING_VISIBLE_MS = 7000;
   let chunksReadyAt = null;
 
   function countLoadedChunksInRenderRange() {
@@ -862,12 +863,32 @@ export function main() {
     return { loadedInRange, totalInRange };
   }
 
+  function hideLoadingOverlay() {
+    if (loadingOverlayHidden) return;
+    loadingOverlayHidden = true;
+    loadingOverlay.style.transition = "opacity 220ms ease";
+    loadingOverlay.style.opacity = "0";
+    setTimeout(() => {
+      if (loadingOverlay.parentNode) {
+        loadingOverlay.parentNode.removeChild(loadingOverlay);
+      }
+    }, 240);
+  }
+
   function updateLoadingOverlay() {
     const nowMs = performance.now();
+    const totalVisibleElapsed = nowMs - loadingStartedAt;
     const { loadedInRange, totalInRange } = countLoadedChunksInRenderRange();
     const requiredChunks = Math.min(3, Math.max(1, totalInRange));
 
     loadingStatus.textContent = `Chunks loading`;
+
+    if (!loadingOverlayHidden && totalVisibleElapsed >= MAX_LOADING_VISIBLE_MS) {
+      worldReady = true;
+      loadingHint.textContent = "Loading continued in background...";
+      hideLoadingOverlay();
+      return true;
+    }
     
 
     if (!worldReady && loadedInRange >= requiredChunks) {
@@ -878,18 +899,10 @@ export function main() {
 
     if (worldReady && !loadingOverlayHidden) {
       const readyElapsed = chunksReadyAt === null ? 0 : nowMs - chunksReadyAt;
-      const totalVisibleElapsed = nowMs - loadingStartedAt;
       const canClose = readyElapsed >= READY_HOLD_MS && totalVisibleElapsed >= MIN_LOADING_VISIBLE_MS;
       if (!canClose) return false;
 
-      loadingOverlayHidden = true;
-      loadingOverlay.style.transition = "opacity 220ms ease";
-      loadingOverlay.style.opacity = "0";
-      setTimeout(() => {
-        if (loadingOverlay.parentNode) {
-          loadingOverlay.parentNode.removeChild(loadingOverlay);
-        }
-      }, 240);
+      hideLoadingOverlay();
     }
 
     return worldReady;
