@@ -54,6 +54,14 @@ export const BLOCK_TEXTURES = Object.freeze({
   waterStill: 'assets/textures/block/water_overlay.png',
 });
 
+export const COLORS = Object.freeze({
+  grassTop: 0x77c05d,
+  grassSide: 0x77c05d,
+  leaves: 0x6bc24b,
+  tallGrass: 0x77c05d,
+  cactus: 0x3dc922,
+});
+
 export const MATERIAL_DEFINITIONS = Object.freeze({
   stone: { textureKey: 'stone' },
   dirt: { textureKey: 'dirt' },

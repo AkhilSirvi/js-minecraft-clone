@@ -1,7 +1,3 @@
-// chunkGen.js
-// Generates a chunk (16x16 columns) of height 384 (y from -64..319) using Perlin noise.
-// Features: Biomes, complex terrain, caves, ores, trees, and vegetation.
-
 import { createPerlin } from './perlin.js';
 import { TERRAIN, CAVES, TREES, ORES as CONFIG_ORES, BIOMES } from './config.js';
 import { BLOCK } from '../data/blocks.js';

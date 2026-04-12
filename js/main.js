@@ -11,14 +11,7 @@ import createDebugOverlay from "./debugOverlay.js";
 import { hud, initializeHUD } from "./hud.js";
 import { createPlayerAvatarParts } from "./playerAvatarModel.js";
 import createChat from "./chat.js";
-import {
-  SEED,
-  PLAYER,
-  PHYSICS,
-  RENDER,
-  DAY_NIGHT,
-  CAMERA,
-} from "./config.js";
+import {SEED,PLAYER,PHYSICS,RENDER,DAY_NIGHT,CAMERA,} from "./config.js";
 import WaterPhysics, { WATER_CONFIG } from "./waterPhysics.js";
 
 export function main() {
@@ -28,7 +21,7 @@ export function main() {
   const ambient = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambient);
 
-  //Star Field
+  //star field
   const _starCount = DAY_NIGHT.starCount || 1500;
   const _starRadius = DAY_NIGHT.orbitDistance * 0.95;
   const _starPositions = new Float32Array(_starCount * 3);

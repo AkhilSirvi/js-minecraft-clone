@@ -58,9 +58,8 @@ export const RENDER = {
   nearClip: 0.1,         // near clipping plane
   farClip: 1000,         // far clipping plane
   maxPixelRatio: 1.5,    // max device pixel ratio
-  smoothLighting: false,  // toggle smooth per-vertex lighting
+  smoothLighting: true,  // toggle smooth per-vertex lighting
   enableFrustumCulling: true,  // GPU frustum culling
-  mergeGeometry: true,   // merge chunk geometry for fewer draw calls
 };
 
 export const PLAYER = {
@@ -133,15 +132,6 @@ export const DAY_NIGHT = {
   orbitDistance: 600,
 };
 
-export const COLORS = {
-  grassTop: 0x77c05d,       // grass block top color
-  grassSide: 0x77c05d,      // grass block side color
-  leaves: 0x6bc24b,         // tree leaves color
-  tallGrass: 0x77c05d,      // tall grass color
-  cactus: 0x3dc922,         // cactus color
-};
-
 export const DEBUG = {
   logChunkLoading: true,   // log chunk load/unload
-  showStartupInfo: true,    // show startup console logs
 };
