@@ -60,20 +60,28 @@ export default class ChunkManager {
     }
     this._debugOverlay = options.debugOverlay ?? null;
     if (this._debugOverlay && DEBUG.logChunkLoading) this._debugOverlay.pushMessage(`ChunkManager init — view=${this.viewDistance}`, { duration: 2500 });
+    const chunkStreaming = RENDER.chunkStreaming || {};
     this.materials = this._createMaterials();
     // async load queue to avoid blocking the main thread
     this._loadQueue = [];
     this._isProcessingQueue = false;
     // Finalization queue to spread expensive main-thread work across frames
     this._finalizationQueue = [];
-    this._maxFinalizationsPerFrame = 10; // Limit finalizations to avoid lag spikes
+    this._maxFinalizationsPerFrame = options.maxFinalizationsPerFrame ?? chunkStreaming.maxFinalizationsPerFrame ?? 2;
+    // Neighbor rebuild queue to avoid remesh bursts when adjacent chunks stream in.
+    this._neighborRebuildQueue = [];
+    this._neighborRebuildSet = new Set();
+    this._maxNeighborRebuildsPerFrame = options.maxNeighborRebuildsPerFrame ?? chunkStreaming.maxNeighborRebuildsPerFrame ?? 1;
     // Unload queue to spread chunk disposal across frames
     this._unloadQueue = [];
-    this._maxUnloadsPerFrame = 3; // Limit unloads per frame to avoid lag spikes
+    this._maxUnloadsPerFrame = options.maxUnloadsPerFrame ?? chunkStreaming.maxUnloadsPerFrame ?? 2;
     // Idle callback timeout for load queue processing
-    this._idleCallbackTimeout = 5; // ms timeout for requestIdleCallback
-    this._idleMinTimeMs = 3; // Minimum idle time needed before queuing worker work
-    this._maxLoadsPerIdle = 3; // Small batching helps reduce pulsing in chunk loads
+    this._idleCallbackTimeout = options.idleCallbackTimeout ?? chunkStreaming.idleCallbackTimeoutMs ?? 16;
+    this._idleMinTimeMs = options.idleMinTimeMs ?? chunkStreaming.idleMinTimeMs ?? 2;
+    this._maxLoadsPerIdle = options.maxLoadsPerIdle ?? chunkStreaming.maxLoadsPerIdle ?? 1;
+    this._loadQueueRetryDelayMs = options.loadQueueRetryDelayMs ?? chunkStreaming.loadQueueRetryDelayMs ?? 8;
+    this._loadQueueForceProgressMs = options.loadQueueForceProgressMs ?? chunkStreaming.loadQueueForceProgressMs ?? 120;
+    this._lastLoadQueueProgressAt = performance.now();
     // Per-chunk block overrides so mined/placed blocks survive unload/reload.
     // key -> Map(localBlockIndex -> blockId)
     this._chunkBlockOverrides = new Map();
@@ -724,10 +732,36 @@ export default class ChunkManager {
       const neighborKey = this._key(nx, nz);
       const neighbor = this.chunks.get(neighborKey);
       if (neighbor) {
-        // Rebuild the neighbor chunk mesh to properly cull faces now hidden by this new chunk
-        this._rebuildChunkMeshOnly(nx, nz);
+        // Queue neighbor remesh; processing is throttled to avoid frame spikes.
+        if (!this._neighborRebuildSet.has(neighborKey)) {
+          this._neighborRebuildSet.add(neighborKey);
+          this._neighborRebuildQueue.push({ key: neighborKey, cx: nx, cz: nz });
+        }
       }
     }
+  }
+
+  _processNeighborRebuildQueue() {
+    if (this._neighborRebuildQueue.length === 0) return 0;
+
+    if (this._playerChunkX !== null && this._playerChunkZ !== null) {
+      this._neighborRebuildQueue.sort((a, b) => {
+        const aDist = (a.cx - this._playerChunkX) ** 2 + (a.cz - this._playerChunkZ) ** 2;
+        const bDist = (b.cx - this._playerChunkX) ** 2 + (b.cz - this._playerChunkZ) ** 2;
+        return aDist - bDist;
+      });
+    }
+
+    let processedCount = 0;
+    while (this._neighborRebuildQueue.length > 0 && processedCount < this._maxNeighborRebuildsPerFrame) {
+      const item = this._neighborRebuildQueue.shift();
+      this._neighborRebuildSet.delete(item.key);
+      if (!item || !this.chunks.has(item.key)) continue;
+      this._rebuildChunkMeshOnly(item.cx, item.cz);
+      processedCount++;
+    }
+
+    return processedCount;
   }
 
   _buildChunkMesh(chunk, cx, cz, top, skyLight = null, blockLight = null) {
@@ -1090,12 +1124,21 @@ export default class ChunkManager {
     if (this._isProcessingQueue) return;
     this._loadQueue.sort((a, b) => a.priority - b.priority);
     this._isProcessingQueue = true;
+    const scheduleNext = () => {
+      if (this._loadQueue.length === 0) return;
+      setTimeout(() => {
+        this.processLoadQueue();
+      }, this._loadQueueRetryDelayMs);
+    };
+
     const processWhenIdle = (deadline) => {
-      if (deadline.timeRemaining() < this._idleMinTimeMs && !deadline.didTimeout) {
+      const now = performance.now();
+      const stalledMs = now - this._lastLoadQueueProgressAt;
+      const shouldForceProgress = stalledMs >= this._loadQueueForceProgressMs;
+
+      if (!shouldForceProgress && deadline.timeRemaining() < this._idleMinTimeMs && !deadline.didTimeout) {
         this._isProcessingQueue = false;
-        if (this._loadQueue.length > 0) {
-          this.processLoadQueue();
-        }
+        scheduleNext();
         return;
       }
 
@@ -1127,11 +1170,13 @@ export default class ChunkManager {
         }
       }
 
+      if (submitted > 0) {
+        this._lastLoadQueueProgressAt = performance.now();
+      }
+
       this._isProcessingQueue = false;
 
-      if (this._loadQueue.length > 0) {
-        this.processLoadQueue();
-      }
+      scheduleNext();
     };
     
     if (typeof requestIdleCallback !== 'undefined') {
@@ -1139,15 +1184,15 @@ export default class ChunkManager {
     } else {
       setTimeout(() => {
         processWhenIdle({ timeRemaining: () => 50, didTimeout: true });
-      }, 50);
+      }, this._loadQueueRetryDelayMs);
     }
   }
 
 
   _processFinalizationQueue() {
     const baseRate = this._maxFinalizationsPerFrame;
-    const urgentRate = Math.min(baseRate * 2, Math.max(baseRate, Math.ceil(this._finalizationQueue.length / 10)));
-    const maxToProcess = this._finalizationQueue.length > 5 ? urgentRate : baseRate;
+    const extraWhenBacklogged = this._finalizationQueue.length > 8 ? 1 : 0;
+    const maxToProcess = baseRate + extraWhenBacklogged;
     
     let processedCount = 0;
 
@@ -1178,6 +1223,8 @@ export default class ChunkManager {
       this._finalizeChunkFromWorker(item.chunk, item.cx, item.cz, item.meta);
       processedCount++;
     }
+
+    return processedCount;
   }
 
   // Process unload queue - limit per frame to avoid lag spikes
@@ -1226,8 +1273,11 @@ export default class ChunkManager {
 
   update(centerWorldX, centerWorldZ, facingDir = null) {
     const bs = this.blockSize;
-    this._processFinalizationQueue();
+    const finalizedThisFrame = this._processFinalizationQueue();
     this._processUnloadQueue();
+    if (finalizedThisFrame === 0) {
+      this._processNeighborRebuildQueue();
+    }
 
     // compute center chunk coords
     const centerChunkX = Math.floor(centerWorldX / (CHUNK_SIZE * bs));
@@ -1360,6 +1410,13 @@ export default class ChunkManager {
         console.log(`ChunkManager: ${fMsg} outside view distance`);
         if (this._debugOverlay) this._debugOverlay.pushMessage(fMsg, { duration: 2200 });
       }
+    }
+
+    // Clean up neighbor rebuild queue for chunks outside view distance
+    if (this._neighborRebuildQueue.length > 0) {
+      this._neighborRebuildQueue = this._neighborRebuildQueue.filter(item => wanted.has(item.key));
+      this._neighborRebuildSet.clear();
+      for (const item of this._neighborRebuildQueue) this._neighborRebuildSet.add(item.key);
     }
   }
 
@@ -1746,6 +1803,10 @@ export default class ChunkManager {
     
     // Clear finalization queue
     this._finalizationQueue = [];
+
+    // Clear neighbor rebuild queue
+    this._neighborRebuildQueue = [];
+    this._neighborRebuildSet.clear();
     
     // Clear unload queue
     this._unloadQueue = [];

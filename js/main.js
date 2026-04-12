@@ -1322,7 +1322,7 @@ export function main() {
   const velocity = new THREE.Vector3();
   const direction = new THREE.Vector3();
   let prevTime = performance.now();
-  const LOAD_QUEUE_INTERVAL_MS = 33;
+  const LOAD_QUEUE_INTERVAL_MS = RENDER.chunkStreaming?.loadQueueIntervalMs ?? 50;
   let lastLoadQueueProcessAt = prevTime;
   let walkTimer = 0;
   let velY = 0;

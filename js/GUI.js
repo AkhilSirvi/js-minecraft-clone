@@ -20,6 +20,12 @@ function loadSettings() {
   } catch (e) {
     console.warn('Could not load settings:', e);
   }
+
+  const viewDistanceCap = Math.max(2, Math.floor(RENDER.viewDistance));
+  gameSettings.viewDistance = Math.max(2, Math.min(viewDistanceCap, Number(gameSettings.viewDistance) || RENDER.viewDistance));
+  gameSettings.fov = Math.max(60, Math.min(110, Number(gameSettings.fov) || RENDER.fov));
+  gameSettings.mouseSensitivity = Math.max(0.0005, Math.min(0.0055, Number(gameSettings.mouseSensitivity) || CAMERA.mouseSensitivity));
+  gameSettings.volume = Math.max(0, Math.min(1, Number(gameSettings.volume) || 1));
 }
 
 // Save settings to localStorage
@@ -57,6 +63,9 @@ export function initMenu() {
   // Load saved settings
   loadSettings();
 
+  const viewDistanceCap = Math.max(2, Math.floor(RENDER.viewDistance));
+  viewDistanceInput.max = String(viewDistanceCap);
+
   // Apply loaded settings to UI
   function updateSettingsUI() {
     viewDistanceInput.value = gameSettings.viewDistance;
@@ -83,7 +92,7 @@ export function initMenu() {
 
   // Save settings
   settingsSave.addEventListener('click', () => {
-    gameSettings.viewDistance = parseInt(viewDistanceInput.value);
+    gameSettings.viewDistance = Math.max(2, Math.min(viewDistanceCap, parseInt(viewDistanceInput.value, 10) || viewDistanceCap));
     gameSettings.fov = parseInt(fovInput.value);
     gameSettings.mouseSensitivity = 0.0005 + (parseInt(sensitivityInput.value) * 0.00025);
     gameSettings.volume = parseInt(volumeInput.value) / 100;

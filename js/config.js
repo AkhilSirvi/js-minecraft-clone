@@ -53,13 +53,24 @@ export const ORES = {
 };
 
 export const RENDER = {
-  viewDistance: 6,       // chunk render distance
-  fov: 75,               // camera field of view
-  nearClip: 0.1,         // near clipping plane
-  farClip: 1000,         // far clipping plane
-  maxPixelRatio: 1.5,    // max device pixel ratio
-  smoothLighting: true,  // toggle smooth per-vertex lighting
-  enableFrustumCulling: true,  // GPU frustum culling
+  viewDistance: 5,                       // chunk render distance
+  fov: 75,                               // camera field of view
+  nearClip: 0.1,                         // near clipping plane
+  farClip: 1000,                         // far clipping plane
+  maxPixelRatio: 1.25,                   // cap DPR to reduce GPU/frame-time spikes on chunk loads
+  smoothLighting: false,                 // interpolate lighting across block faces (more expensive)
+  enableFrustumCulling: true,            // GPU frustum culling
+  chunkStreaming: {
+    loadQueueIntervalMs: 50,             // how often main loop tries to drain load queue
+    idleCallbackTimeoutMs: 16,           // max wait for idle callback before timeout path
+    idleMinTimeMs: 2,                    // minimum idle budget to submit worker jobs
+    maxLoadsPerIdle: 1,                  // cap chunk loads per idle callback to avoid long frame stalls
+    maxFinalizationsPerFrame: 1,         // cap main-thread chunk mesh builds to reduce spikes
+    maxNeighborRebuildsPerFrame: 1,      // cap border remeshes caused by adjacent chunk loads
+    maxUnloadsPerFrame: 2,               // spread chunk disposal work across frames
+    loadQueueRetryDelayMs: 8,            // small delay before retrying idle queue processing
+    loadQueueForceProgressMs: 120,       // force progress if idle budget stays low for too long
+  },
 };
 
 export const PLAYER = {
