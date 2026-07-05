@@ -185,7 +185,7 @@ export function main(worldOptions = {}) {
   let ticksPerSecond = 20; // adjustable tick speed
   let tickCount = 0;
   let tickRemainder = 0;
-  const cycleStart = 170;
+  const cycleStart = 850;
 
   const celestialPos = new THREE.Vector3();
 
