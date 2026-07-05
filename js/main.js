@@ -14,7 +14,15 @@ import createChat from "./chat.js";
 import {SEED,PLAYER,PHYSICS,RENDER,DAY_NIGHT,CAMERA,} from "./config.js";
 import WaterPhysics, { WATER_CONFIG } from "./waterPhysics.js";
 
-export function main() {
+export function main(worldOptions = {}) {
+  const activeSeed = Number.isFinite(worldOptions.seed) ? worldOptions.seed : SEED;
+  const activeWorldName =
+    typeof worldOptions.worldName === "string" && worldOptions.worldName.trim()
+      ? worldOptions.worldName.trim()
+      : "New World";
+  document.title = `${activeWorldName} - MineCraft Clone in JS`;
+  window.currentWorld = { name: activeWorldName, seed: activeSeed };
+
   const scene = new THREE.Scene();
   scene.background = null;
 
@@ -28,7 +36,7 @@ export function main() {
   const _starPhases = new Float32Array(_starCount);
   const _starBrightness = new Float32Array(_starCount);
 
-  const _starSeed = (typeof SEED === "number" ? SEED : 0) ^ 0x9e3779b9;
+  const _starSeed = (typeof activeSeed === "number" ? activeSeed : 0) ^ 0x9e3779b9;
   function mulberry32(seed) {
     let t = seed >>> 0;
     return function () {
@@ -177,7 +185,7 @@ export function main() {
   let ticksPerSecond = 20; // adjustable tick speed
   let tickCount = 0;
   let tickRemainder = 0;
-  const cycleStart = 850;
+  const cycleStart = 170;
 
   const celestialPos = new THREE.Vector3();
 
@@ -187,6 +195,297 @@ export function main() {
   const blockSize = 1;
   const debugOverlay = createDebugOverlay();
   const chat = createChat();
+  const keyBindings = gameSettings.keyBindings;
+
+  function isMouseBinding(binding) {
+    return typeof binding === "string" && binding.startsWith("Mouse");
+  }
+
+  function mouseBindingCodeToButton(binding) {
+    if (!isMouseBinding(binding)) return null;
+    const button = Number(binding.slice(5));
+    return Number.isInteger(button) ? button : null;
+  }
+
+  function eventMatchesBinding(eventCode, binding) {
+    if (typeof binding !== "string") return false;
+    return eventCode === binding;
+  }
+
+  function mouseEventMatchesBinding(button, binding) {
+    const boundButton = mouseBindingCodeToButton(binding);
+    return boundButton !== null && boundButton === button;
+  }
+
+  function triggerToggleBinding(action, event) {
+    event.preventDefault();
+    if (action === "toggleThirdPerson") {
+      toggleThirdPerson();
+    } else if (action === "toggleChunkBorders") {
+      try {
+        cm.toggleChunkBorders();
+      } catch (err) {
+        console.warn("toggleChunkBorders error", err);
+      }
+    } else if (action === "placeWater") {
+      if (!waterPhysics) {
+        console.log("Water physics not initialized");
+        return;
+      }
+      if (targetInfo) {
+        const { blockX, blockY, blockZ } = targetInfo;
+        const origin = camera.getWorldPosition(new THREE.Vector3());
+        const dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        let hitPoint = null;
+        const step = 0.01;
+        for (let t = 0; t <= PLAYER.blockreach; t += step) {
+          const p = origin.clone().addScaledVector(dir, t);
+          const bid = cm.getBlockAtWorld(p.x, p.y, p.z);
+          if (
+            bid !== 0 &&
+            Math.floor(p.x) === blockX &&
+            Math.floor(p.y) === blockY &&
+            Math.floor(p.z) === blockZ
+          ) {
+            hitPoint = p;
+            break;
+          }
+        }
+
+        if (!hitPoint) {
+          console.log("Could not find hit point");
+          return;
+        }
+
+        const localX = hitPoint.x - blockX;
+        const localY = hitPoint.y - blockY;
+        const localZ = hitPoint.z - blockZ;
+
+        let placeX = blockX;
+        let placeY = blockY;
+        let placeZ = blockZ;
+
+        const faces = [
+          { name: "left", dist: localX, dx: -1, dy: 0, dz: 0 },
+          { name: "right", dist: 1 - localX, dx: 1, dy: 0, dz: 0 },
+          { name: "bottom", dist: localY, dx: 0, dy: -1, dz: 0 },
+          { name: "top", dist: 1 - localY, dx: 0, dy: 1, dz: 0 },
+          { name: "front", dist: localZ, dx: 0, dy: 0, dz: -1 },
+          { name: "back", dist: 1 - localZ, dx: 0, dy: 0, dz: 1 },
+        ];
+
+        faces.sort((a, b) => a.dist - b.dist);
+        const closestFace = faces[0];
+
+        placeX += closestFace.dx;
+        placeY += closestFace.dy;
+        placeZ += closestFace.dz;
+
+        const checkBlockId = cm.getBlockAtWorld(
+          placeX + 0.5,
+          placeY + 0.5,
+          placeZ + 0.5,
+          true,
+        );
+
+        if (checkBlockId !== 0) {
+          console.log(
+            "Cannot place water - position occupied by block",
+            checkBlockId,
+          );
+          return;
+        }
+
+        try {
+          waterPhysics.placeWater(placeX, placeY, placeZ, true);
+        } catch (error) {
+          console.error("Error placing water:", error);
+        }
+      }
+    }
+  }
+
+  let jumpHeld = false;
+  let heldJumpGroundTime = 0;
+  const HELD_JUMP_REPEAT_DELAY = 0.05;
+
+  function tryStartJump() {
+    if (isSpectator) return;
+    if (!(onGround || (velY <= 0 && velY > -2))) return false;
+
+    const bottomY = player.position.y - currentPlayerHeight / 2;
+    const hx = playerHalfWidth * 0.98;
+    const hz = playerHalfDepth * 0.98;
+    const jumpSamples = [
+      [0, 0],
+      [-hx, -hz],
+      [hx, -hz],
+      [-hx, hz],
+      [hx, hz],
+      [0, -hz],
+      [0, hz],
+      [-hx, 0],
+      [hx, 0],
+    ];
+
+    let hasGroundNearby = onGround;
+    if (!hasGroundNearby) {
+      for (const [ox, oz] of jumpSamples) {
+        const sx = player.position.x + ox;
+        const sz = player.position.z + oz;
+        const gy = cm.getGroundAtWorld(sx, bottomY, sz);
+        if (isFinite(gy) && bottomY - gy < 0.35) {
+          hasGroundNearby = true;
+          break;
+        }
+      }
+    }
+
+    if (hasGroundNearby) {
+      velY = jumpSpeed;
+      onGround = false;
+      heldJumpGroundTime = 0;
+      return true;
+    }
+    return false;
+  }
+
+  function setMovementState(action, active) {
+    if (action === "moveForward") move.forward = active;
+    else if (action === "moveBackward") move.backward = active;
+    else if (action === "moveLeft") move.left = active;
+    else if (action === "moveRight") move.right = active;
+    else if (action === "sprint") move.sprint = active;
+    else if (action === "crouch") {
+      if (isSpectator) move.down = active;
+      else move.crouch = active;
+    } else if (action === "jump") {
+      if (isSpectator) {
+        move.up = active;
+      } else {
+        jumpHeld = active;
+        if (!active) heldJumpGroundTime = 0;
+        if (active) tryStartJump();
+      }
+    } else if (action === "inventory" && active) {
+      hud.toggleInventory();
+      if (hud.showInventory) clearMovementState();
+    } else if (action === "slot1" && active) hud.selectSlot(0);
+    else if (action === "slot2" && active) hud.selectSlot(1);
+    else if (action === "slot3" && active) hud.selectSlot(2);
+    else if (action === "slot4" && active) hud.selectSlot(3);
+    else if (action === "slot5" && active) hud.selectSlot(4);
+    else if (action === "slot6" && active) hud.selectSlot(5);
+    else if (action === "slot7" && active) hud.selectSlot(6);
+    else if (action === "slot8" && active) hud.selectSlot(7);
+    else if (action === "slot9" && active) hud.selectSlot(8);
+  }
+
+  function clearMovementState() {
+    move.forward = false;
+    move.backward = false;
+    move.left = false;
+    move.right = false;
+    move.sprint = false;
+    move.crouch = false;
+    move.up = false;
+    move.down = false;
+    jumpHeld = false;
+    heldJumpGroundTime = 0;
+  }
+
+  function handleActionDown(action, event) {
+    if (hud.showInventory && action !== "inventory") {
+      event.preventDefault();
+      clearMovementState();
+      return;
+    }
+    if (action === "toggleDebug") {
+      debugOverlay.toggle();
+      showDebug = !showDebug;
+      event.preventDefault();
+      return;
+    }
+    if (action === "openChat") {
+      if (!chat.isOpen) {
+        chat.open();
+        event.preventDefault();
+      }
+      return;
+    }
+    if (action === "toggleSpectator") {
+      event.preventDefault();
+      isSpectator = !isSpectator;
+      if (isSpectator) {
+        const _saved = {
+          model: playerModel.visible,
+          head: player_head.visible,
+          body: player_body.visible,
+          leftArmPivot: player_leftArmPivot.visible,
+          rightArmPivot: player_rightArmPivot.visible,
+          leftLegPivot: player_leftLegPivot.visible,
+          rightLegPivot: player_rightLegPivot.visible,
+          _marker: true,
+        };
+        camera.userData._spectatorSavedVisibility = _saved;
+
+        const worldPos = new THREE.Vector3();
+        camera.getWorldPosition(worldPos);
+        const worldQuat = camera.getWorldQuaternion(new THREE.Quaternion());
+        pitchObject.remove(camera);
+        scene.add(camera);
+        camera.position.copy(worldPos);
+        camera.quaternion.copy(worldQuat);
+        const euler = new THREE.Euler().setFromQuaternion(worldQuat, "YXZ");
+        spectatorYaw = euler.y;
+        spectatorPitch = euler.x;
+        spectatorPos.copy(worldPos);
+
+        playerModel.visible = true;
+        player_head.visible = true;
+        player_body.visible = true;
+        player_leftArmPivot.visible = true;
+        player_rightArmPivot.visible = true;
+        player_leftLegPivot.visible = true;
+        player_rightLegPivot.visible = true;
+      } else {
+        scene.remove(camera);
+        pitchObject.add(camera);
+        camera.position.set(0, 0, 0);
+        camera.rotation.set(0, 0, 0);
+
+        const saved = camera.userData._spectatorSavedVisibility;
+        if (saved && saved._marker) {
+          playerModel.visible = saved.model;
+          player_head.visible = saved.head;
+          player_body.visible = saved.body;
+          player_leftArmPivot.visible = saved.leftArmPivot;
+          player_rightArmPivot.visible = saved.rightArmPivot;
+          player_leftLegPivot.visible = saved.leftLegPivot;
+          player_rightLegPivot.visible = saved.rightLegPivot;
+          delete camera.userData._spectatorSavedVisibility;
+        }
+      }
+      return;
+    }
+    if (action === "toggleThirdPerson" || action === "toggleChunkBorders" || action === "placeWater") {
+      triggerToggleBinding(action, event);
+      return;
+    }
+    setMovementState(action, true);
+  }
+
+  function handleActionUp(action, event) {
+    if (hud.showInventory) {
+      clearMovementState();
+      return;
+    }
+    if (action === "toggleDebug" || action === "openChat" || action === "toggleSpectator" || action === "toggleThirdPerson" || action === "toggleChunkBorders" || action === "placeWater") {
+      return;
+    }
+    setMovementState(action, false);
+  }
   
   // Connect chat to debug overlay
   debugOverlay.setChat(chat);
@@ -195,21 +494,56 @@ export function main() {
   let lastDebugUpdate = 0;
   const debugUpdateInterval = 150;
   window.addEventListener("keydown", (e) => {
-    if (e.code === "F3") {
-      debugOverlay.toggle();
-      showDebug = !showDebug;
+    if (chat.isOpen) return;
+    for (const [action, binding] of Object.entries(keyBindings)) {
+      if (!eventMatchesBinding(e.code, binding)) continue;
+      handleActionDown(action, e);
+      break;
     }
-    // Open chat with 'T' key (when not already in chat input)
-    if (e.code === "KeyT" && !chat.isOpen) {
-      chat.open();
-      e.preventDefault();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (chat.isOpen) return;
+    if (hud.showInventory) {
+      clearMovementState();
+      return;
+    }
+    for (const [action, binding] of Object.entries(keyBindings)) {
+      if (!eventMatchesBinding(e.code, binding)) continue;
+      handleActionUp(action, e);
+      break;
+    }
+  });
+  window.addEventListener("mousedown", (e) => {
+    if (chat.isOpen || hud.showInventory) return;
+    for (const [action, binding] of Object.entries(keyBindings)) {
+      if (!mouseEventMatchesBinding(e.button, binding)) continue;
+      handleActionDown(action, e);
+      break;
+    }
+  });
+  window.addEventListener("mouseup", (e) => {
+    if (chat.isOpen || hud.showInventory) return;
+    for (const [action, binding] of Object.entries(keyBindings)) {
+      if (!mouseEventMatchesBinding(e.button, binding)) continue;
+      handleActionUp(action, e);
+      break;
     }
   });
 
   const cm = new ChunkManager(scene, {
-    seed: SEED,
+    seed: activeSeed,
     blockSize,
     viewDistance: gameSettings.viewDistance,
+    smoothLighting: gameSettings.smoothLighting,
+    enableFrustumCulling: gameSettings.enableFrustumCulling,
+    idleCallbackTimeout: gameSettings.chunkStreaming.idleCallbackTimeoutMs,
+    idleMinTimeMs: gameSettings.chunkStreaming.idleMinTimeMs,
+    maxLoadsPerIdle: gameSettings.chunkStreaming.maxLoadsPerIdle,
+    maxFinalizationsPerFrame: gameSettings.chunkStreaming.maxFinalizationsPerFrame,
+    maxNeighborRebuildsPerFrame: gameSettings.chunkStreaming.maxNeighborRebuildsPerFrame,
+    maxUnloadsPerFrame: gameSettings.chunkStreaming.maxUnloadsPerFrame,
+    loadQueueRetryDelayMs: gameSettings.chunkStreaming.loadQueueRetryDelayMs,
+    loadQueueForceProgressMs: gameSettings.chunkStreaming.loadQueueForceProgressMs,
     debugOverlay,
   });
 
@@ -428,6 +762,71 @@ export function main() {
     }
   }
 
+  function getMaxGroundAtPosition(px, pz, bottomY) {
+    const hx = playerHalfWidth * 0.95;
+    const hz = playerHalfDepth * 0.95;
+    const samplesLocal = [
+      [0, 0],
+      [-hx, -hz],
+      [hx, -hz],
+      [-hx, hz],
+      [hx, hz],
+      [0, -hz],
+      [0, hz],
+      [-hx, 0],
+      [hx, 0],
+    ];
+    let maxG = -Infinity;
+    for (const [ox, oz] of samplesLocal) {
+      const sx = px + ox;
+      const sz = pz + oz;
+      const gy = cm.getGroundAtWorld(sx, bottomY, sz);
+      if (isFinite(gy) && gy > maxG) maxG = gy;
+    }
+    return maxG;
+  }
+
+  function getLowestCeilingAtPosition(px, pz, currentTopY, projectedTopY) {
+    const hx = playerHalfWidth * 0.95;
+    const hz = playerHalfDepth * 0.95;
+    const samples = [
+      [0, 0],
+      [-hx, -hz],
+      [hx, -hz],
+      [-hx, hz],
+      [hx, hz],
+      [0, -hz],
+      [0, hz],
+      [-hx, 0],
+      [hx, 0],
+    ];
+
+    let lowestCeilingY = Infinity;
+    const bs = blockSize;
+    const startBlockY = Math.floor((currentTopY - MIN_Y * bs) / bs) + MIN_Y;
+    const endBlockY = Math.floor((projectedTopY - MIN_Y * bs) / bs) + MIN_Y;
+
+    for (let blockY = startBlockY; blockY <= endBlockY + 1; blockY++) {
+      const checkY = blockY * bs + bs * 0.5;
+      for (const [ox, oz] of samples) {
+        const sx = px + ox;
+        const sz = pz + oz;
+        const headBlockId = cm.getBlockAtWorld(sx, checkY, sz, true);
+        if (!isBlockPassable(headBlockId)) {
+          const blockBottomWorldY = blockY * bs;
+          if (
+            blockBottomWorldY < lowestCeilingY &&
+            blockBottomWorldY > currentTopY - 0.01
+          ) {
+            lowestCeilingY = blockBottomWorldY;
+          }
+        }
+      }
+    }
+
+    return lowestCeilingY;
+  }
+
   const spawnWorldX = PLAYER.spawnX,
     spawnWorldZ = PLAYER.spawnZ;
   // Use synchronous loading for spawn to ensure chunk is loaded before player spawns
@@ -438,8 +837,8 @@ export function main() {
   const camera = new THREE.PerspectiveCamera(
     gameSettings.fov,
     window.innerWidth / window.innerHeight,
-    RENDER.nearClip,
-    RENDER.farClip,
+    gameSettings.nearClip,
+    gameSettings.farClip,
   );
   let defaultFov = gameSettings.fov;
   let sprintFov = defaultFov + 15;
@@ -785,7 +1184,7 @@ export function main() {
   };
 
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setPixelRatio(RENDER.maxPixelRatio);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, gameSettings.maxPixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(DAY_NIGHT.skyDayColor, 1);
   renderer.domElement.style.position = "fixed";
@@ -794,6 +1193,7 @@ export function main() {
   renderer.domElement.style.width = "100%";
   renderer.domElement.style.height = "100%";
   renderer.domElement.style.zIndex = "0";
+  renderer.domElement.id = "game-canvas";
   document.body.appendChild(renderer.domElement);
 
   const loadingOverlay = document.createElement("div");
@@ -811,7 +1211,7 @@ export function main() {
   loadingOverlay.style.pointerEvents = "auto";
 
   const loadingTitle = document.createElement("div");
-  loadingTitle.textContent = "Loading world";
+  loadingTitle.textContent = `Loading ${activeWorldName}`;
   loadingTitle.style.fontSize = "22px";
   loadingTitle.style.letterSpacing = "1px";
 
@@ -950,8 +1350,9 @@ export function main() {
     placeBlockId: 2,
     reach: PLAYER.blockreach,
     blockBreaker,
+    bindings: keyBindings,
     getFirstPersonRay,
-    shouldDisableInput: () => chat.isOpen,
+    shouldDisableInput: () => chat.isOpen || hud.showInventory,
     getPlaceBlockId: () => {
       // Get the block ID from selected hotbar item
       const selectedItem = hud.inventory[hud.selectedSlot];
@@ -1001,7 +1402,7 @@ export function main() {
   const PI_2 = Math.PI / 2;
   function onMouseMove(e) {
     if (document.pointerLockElement !== renderer.domElement) return;
-    if (chat.isOpen) return;
+    if (chat.isOpen || hud.showInventory) return;
     const movementX = e.movementX || 0;
     const movementY = e.movementY || 0;
     if (isSpectator) {
@@ -1025,9 +1426,13 @@ export function main() {
   function onKeyDown(e) {
     // Skip game input if chat is open
     if (chat.isOpen) return;
+    if (hud.showInventory && e.code !== keyBindings.inventory) {
+      clearMovementState();
+      return;
+    }
     
     switch (e.code) {
-      case "KeyH":
+      case keyBindings.toggleSpectator:
         e.preventDefault();
         // Toggle spectator mode
         isSpectator = !isSpectator;
@@ -1089,18 +1494,18 @@ export function main() {
           }
         }
         break;
-      case "F5":
+      case keyBindings.toggleThirdPerson:
         e.preventDefault();
         toggleThirdPerson();
         break;
-      case "KeyB":
+      case keyBindings.toggleChunkBorders:
         try {
           cm.toggleChunkBorders();
         } catch (err) {
           console.warn("toggleChunkBorders error", err);
         }
         break;
-      case "KeyQ":
+      case keyBindings.placeWater:
         e.preventDefault();
         if (!waterPhysics) {
           console.log("Water physics not initialized");
@@ -1184,125 +1589,115 @@ export function main() {
           }
         }
         break;
-      case "KeyW":
+      case keyBindings.moveForward:
         move.forward = true;
         break;
-      case "KeyS":
+      case keyBindings.moveBackward:
         move.backward = true;
         break;
-      case "KeyA":
+      case keyBindings.moveLeft:
         move.left = true;
         break;
-      case "KeyD":
+      case keyBindings.moveRight:
         move.right = true;
         break;
-      case "ControlLeft":
-      case "ControlRight":
+      case keyBindings.sprint:
         move.sprint = true;
         break;
-      case "ShiftLeft":
-      case "ShiftRight":
+      case keyBindings.crouch:
         if (isSpectator) move.down = true;
         else move.crouch = true;
         break;
-      case "Space":
+      case keyBindings.jump:
         e.preventDefault();
         if (isSpectator) {
           move.up = true;
           break;
         }
-        if (onGround || (velY <= 0 && velY > -2)) {
-          const bottomY = player.position.y - currentPlayerHeight / 2;
-          const hx = playerHalfWidth * 0.98;
-          const hz = playerHalfDepth * 0.98;
-          const jumpSamples = [
-            [0, 0],
-            [-hx, -hz],
-            [hx, -hz],
-            [-hx, hz],
-            [hx, hz],
-            [0, -hz],
-            [0, hz],
-            [-hx, 0],
-            [hx, 0],
-          ];
-          let hasGroundNearby = onGround;
-          if (!hasGroundNearby) {
-            for (const [ox, oz] of jumpSamples) {
-              const sx = player.position.x + ox;
-              const sz = player.position.z + oz;
-              const gy = cm.getGroundAtWorld(sx, bottomY, sz);
-              if (isFinite(gy) && bottomY - gy < 0.35) {
-                hasGroundNearby = true;
-                break;
-              }
-            }
-          }
-          if (hasGroundNearby) {
-            velY = jumpSpeed;
-            onGround = false;
-          }
-        }
+        jumpHeld = true;
+        tryStartJump();
 
         break;
-      case "Digit1":
-      case "Digit2":
-      case "Digit3":
-      case "Digit4":
-      case "Digit5":
-      case "Digit6":
-      case "Digit7":
-      case "Digit8":
-      case "Digit9":
-        // Hotbar selection (1-9)
-        const slotNum = parseInt(e.code[5]) - 1;
-        hud.selectSlot(slotNum);
+      case keyBindings.inventory:
+        hud.toggleInventory();
+        if (hud.showInventory) clearMovementState();
         e.preventDefault();
         break;
-      case "KeyE":
-        hud.toggleInventory();
+      case keyBindings.slot1:
+        hud.selectSlot(0);
+        e.preventDefault();
+        break;
+      case keyBindings.slot2:
+        hud.selectSlot(1);
+        e.preventDefault();
+        break;
+      case keyBindings.slot3:
+        hud.selectSlot(2);
+        e.preventDefault();
+        break;
+      case keyBindings.slot4:
+        hud.selectSlot(3);
+        e.preventDefault();
+        break;
+      case keyBindings.slot5:
+        hud.selectSlot(4);
+        e.preventDefault();
+        break;
+      case keyBindings.slot6:
+        hud.selectSlot(5);
+        e.preventDefault();
+        break;
+      case keyBindings.slot7:
+        hud.selectSlot(6);
+        e.preventDefault();
+        break;
+      case keyBindings.slot8:
+        hud.selectSlot(7);
+        e.preventDefault();
+        break;
+      case keyBindings.slot9:
+        hud.selectSlot(8);
         e.preventDefault();
         break;
     }
   }
 
   function onKeyUp(e) {
-    // Skip if chat is open
-    if (chat.isOpen) return;
+    // Skip if chat or inventory is open
+    if (chat.isOpen || hud.showInventory) return;
+    
     
     switch (e.code) {
-      case "KeyW":
+      case keyBindings.moveForward:
         move.forward = false;
         break;
-      case "KeyS":
+      case keyBindings.moveBackward:
         move.backward = false;
         break;
-      case "KeyA":
+      case keyBindings.moveLeft:
         move.left = false;
         break;
-      case "KeyD":
+      case keyBindings.moveRight:
         move.right = false;
         break;
-      case "ControlLeft":
-      case "ControlRight":
+      case keyBindings.sprint:
         move.sprint = false;
         break;
-      case "ShiftLeft":
-      case "ShiftRight":
+      case keyBindings.crouch:
         if (isSpectator) move.down = false;
         else move.crouch = false;
         break;
-      case "Space":
+      case keyBindings.jump:
         if (isSpectator) {
           move.up = false;
+        } else {
+          jumpHeld = false;
+          heldJumpGroundTime = 0;
         }
         break;
     }
   }
 
-  document.addEventListener("mousemove", onMouseMove);
-  document.addEventListener("keydown", onKeyDown);
-  document.addEventListener("keyup", onKeyUp);
   // Adjust spectator movement speed with mouse wheel when spectating
   function onWheel(e) {
     if (!isSpectator) return;
@@ -1311,6 +1706,7 @@ export function main() {
     spectatorSpeedMultiplier = Math.max(0.05, spectatorSpeedMultiplier * factor)
 
   }
+  document.addEventListener("mousemove", onMouseMove);
   document.addEventListener("wheel", onWheel, { passive: true });
 
   window.addEventListener("resize", () => {
@@ -1322,7 +1718,7 @@ export function main() {
   const velocity = new THREE.Vector3();
   const direction = new THREE.Vector3();
   let prevTime = performance.now();
-  const LOAD_QUEUE_INTERVAL_MS = RENDER.chunkStreaming?.loadQueueIntervalMs ?? 50;
+  const LOAD_QUEUE_INTERVAL_MS = gameSettings.chunkStreaming.loadQueueIntervalMs;
   let lastLoadQueueProcessAt = prevTime;
   let walkTimer = 0;
   let velY = 0;
@@ -1342,6 +1738,7 @@ export function main() {
   const safeFallDistance = PHYSICS.safeFallDistance ?? 3;
   const fallDamageMultiplier = PHYSICS.fallDamageMultiplier ?? 1;
   const fallDamageFeetOffset = 0.05;
+  const GROUND_CONTACT_EPSILON = 0.02;
 
   let damageTilt = 0;
   let damageTiltVelocity = 0;
@@ -1525,35 +1922,8 @@ export function main() {
       velocity.z = (velocity.z / horizSpeed) * currentMaxSpeed;
     }
 
-    velY += gravity * dt;
-    if (velY < terminalVelocity) velY = terminalVelocity;
-
     const moveX = velocity.x * dt;
     const moveZ = velocity.z * dt;
-    function getMaxGroundAtPosition(px, pz, bottomY) {
-      const hx = playerHalfWidth * 0.95;
-      const hz = playerHalfDepth * 0.95;
-      const samplesLocal = [
-        [0, 0],
-        [-hx, -hz],
-        [hx, -hz],
-        [-hx, hz],
-        [hx, hz],
-        [0, -hz],
-        [0, hz],
-        [-hx, 0],
-        [hx, 0],
-      ];
-      let maxG = -Infinity;
-      for (const [ox, oz] of samplesLocal) {
-        const sx = px + ox;
-        const sz = pz + oz;
-        const gy = cm.getGroundAtWorld(sx, bottomY, sz);
-        if (isFinite(gy) && gy > maxG) maxG = gy;
-      }
-      return maxG;
-    }
-
     if (moveX !== 0) {
       const newX = player.position.x + moveX;
       const currentBottomY = player.position.y - currentPlayerHeight / 2;
@@ -1616,52 +1986,38 @@ export function main() {
       }
     }
 
+    const currentMaxGround = getMaxGroundAtPosition(
+      player.position.x,
+      player.position.z,
+      startBottomY,
+    );
+    const hasSupportNow =
+      isFinite(currentMaxGround) &&
+      startBottomY - currentMaxGround <= GROUND_CONTACT_EPSILON;
+
+    if (hasSupportNow) {
+      onGround = true;
+      if (velY < 0) velY = 0;
+    } else {
+      onGround = false;
+      velY += gravity * dt;
+      if (velY < terminalVelocity) velY = terminalVelocity;
+    }
+
     let moveY = velY * dt;
     if (velY > 0) {
       const currentTopY = player.position.y + currentPlayerHeight / 2;
       const projectedTopY = currentTopY + moveY;
-      const hx = playerHalfWidth * 0.95;
-      const hz = playerHalfDepth * 0.95;
-      const ceilingSamples = [
-        [0, 0],
-        [-hx, -hz],
-        [hx, -hz],
-        [-hx, hz],
-        [hx, hz],
-        [0, -hz],
-        [0, hz],
-        [-hx, 0],
-        [hx, 0],
-      ];
-
-      let lowestCeilingY = Infinity;
-      const bs = blockSize;
-
-      const startBlockY = Math.floor((currentTopY - MIN_Y * bs) / bs) + MIN_Y;
-      const endBlockY = Math.floor((projectedTopY - MIN_Y * bs) / bs) + MIN_Y;
-
-      for (let blockY = startBlockY; blockY <= endBlockY + 1; blockY++) {
-        const checkY = blockY * bs + bs * 0.5;
-        for (const [ox, oz] of ceilingSamples) {
-          const sx = player.position.x + ox;
-          const sz = player.position.z + oz;
-          // Use conservative mode to prevent phasing through unloaded ceilings
-          const headBlockId = cm.getBlockAtWorld(sx, checkY, sz, true);
-          if (!isBlockPassable(headBlockId)) {
-            const blockBottomWorldY = blockY * bs;
-            if (
-              blockBottomWorldY < lowestCeilingY &&
-              blockBottomWorldY > currentTopY - 0.01
-            ) {
-              lowestCeilingY = blockBottomWorldY;
-            }
-          }
-        }
-      }
+      const lowestCeilingY = getLowestCeilingAtPosition(
+        player.position.x,
+        player.position.z,
+        currentTopY,
+        projectedTopY,
+      );
 
       if (isFinite(lowestCeilingY)) {
-        const maxAllowedTopY = lowestCeilingY - 0.15;
-        const maxAllowedMove = maxAllowedTopY - currentTopY;
+        const collisionSkin = 0.001;
+        const maxAllowedMove = lowestCeilingY - collisionSkin - currentTopY;
         if (maxAllowedMove < moveY) {
           moveY = Math.max(0, maxAllowedMove);
           velY = 0;
@@ -1704,8 +2060,12 @@ export function main() {
         velY = 0;
         onGround = true;
       } else {
-        const groundThreshold = velY <= 0 ? 0.25 : 0.1;
-        onGround = playerBottomY - maxGroundY < groundThreshold;
+        const groundGap = playerBottomY - maxGroundY;
+        onGround = groundGap <= GROUND_CONTACT_EPSILON;
+        if (onGround && velY <= 0) {
+          player.position.y = maxGroundY + currentPlayerHeight / 2;
+          velY = 0;
+        }
       }
     } else {
       // No valid ground data - chunks not loaded yet
@@ -1719,6 +2079,15 @@ export function main() {
       } else {
         onGround = false;
       }
+    }
+
+    if (jumpHeld && onGround) {
+      heldJumpGroundTime += dt;
+      if (heldJumpGroundTime >= HELD_JUMP_REPEAT_DELAY) {
+        tryStartJump();
+      }
+    } else {
+      heldJumpGroundTime = 0;
     }
 
     const endBottomY = player.position.y - currentPlayerHeight / 2;
@@ -1995,12 +2364,12 @@ export function main() {
       clouds.group.position.x = playerTileX + driftOffsetX - cloudWidth;
       clouds.group.position.z = player.position.z - cloudHeight;
       if (clouds.materials) {
-        _cloudTint
-          .copy(_cloudDayColor)
-          .lerp(_cloudNightColor, 1 - Math.min(1, ambientRatio / 2.0));
-        if (sunIntensity > 0.01 && sunIntensity < 0.95) {
-          const warmth = Math.sin(sunIntensity * Math.PI) * 0.4;
-          _cloudTint.lerp(_cloudWarmColor, warmth);
+        const cloudNightFactor = sunHeight < 0
+          ? 1 - smoothstep(-0.25, 0.0, sunHeight)
+          : 0;
+        _cloudTint.copy(_cloudDayColor);
+        if (cloudNightFactor > 0) {
+          _cloudTint.lerp(_cloudNightColor, cloudNightFactor);
         }
         const sideRatio = 0.8;
         const bottomRatio = 0.7;
@@ -2104,7 +2473,7 @@ export function main() {
         target: targetInfo,
         loadedChunks: cm.chunks.size,
         memory: mem,
-        biome: getBiomeAtWorld(player.position.x, player.position.z, SEED),
+        biome: getBiomeAtWorld(player.position.x, player.position.z, activeSeed),
         lookVec,
         facing: {
           name: facingName,

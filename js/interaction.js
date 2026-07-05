@@ -9,35 +9,96 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
   let getPlaceBlockId = opts.getPlaceBlockId || null;
   let onPlaceBlock = opts.onPlaceBlock || null;
   let shouldDisableInput = opts.shouldDisableInput || null;
+  const bindings = opts.bindings || {};
+  const attackBinding = opts.attackBinding || bindings.attack || 'Mouse0';
+  const placeBinding = opts.placeBinding || bindings.place || 'Mouse2';
   const mouseButtons = { left: false, right: false };
   let placeInterval = null;
+
+  function isMouseBinding(binding) {
+    return typeof binding === 'string' && binding.startsWith('Mouse');
+  }
+
+  function mouseBindingToButton(binding) {
+    if (!isMouseBinding(binding)) return null;
+    const button = Number(binding.slice(5));
+    return Number.isInteger(button) ? button : null;
+  }
+
+  function eventMatchesBinding(evt, binding) {
+    if (!binding) return false;
+    if (isMouseBinding(binding)) {
+      return typeof evt.button === 'number' && evt.button === mouseBindingToButton(binding);
+    }
+    return evt.code === binding;
+  }
+
+  function startAttack() {
+    if (mouseButtons.left) return;
+    mouseButtons.left = true;
+    if (opts.blockBreaker) opts.blockBreaker._mouseDown = true;
+    if (opts.blockBreaker && typeof opts.blockBreaker.startBreaking === 'function') {
+      opts.blockBreaker.startBreaking();
+    } else {
+      performAction({ button: 0 });
+    }
+  }
+
+  function stopAttack() {
+    mouseButtons.left = false;
+    if (opts.blockBreaker) opts.blockBreaker._mouseDown = false;
+    if (opts.blockBreaker && typeof opts.blockBreaker.stopBreaking === 'function') {
+      opts.blockBreaker.stopBreaking();
+    }
+  }
+
+  function startPlace() {
+    if (mouseButtons.right) return;
+    mouseButtons.right = true;
+    performAction({ button: 2 });
+    startPlacing();
+  }
+
+  function stopPlace() {
+    mouseButtons.right = false;
+    stopPlacing();
+  }
+
   const onContextMenu = (e) => e.preventDefault();
   const onMouseDown = (evt) => {
     if (shouldDisableInput && shouldDisableInput()) return;
-    if (evt.button === 0) {
-      mouseButtons.left = true;
-      if (opts.blockBreaker) opts.blockBreaker._mouseDown = true;
-      if (opts.blockBreaker && typeof opts.blockBreaker.startBreaking === 'function') {
-        opts.blockBreaker.startBreaking();
-      } else {
-        performAction(evt);
-      }
-    } else if (evt.button === 2) {
-      performAction(evt);
-      mouseButtons.right = true;
-      startPlacing();
+    if (eventMatchesBinding(evt, attackBinding)) {
+      startAttack();
+    } else if (eventMatchesBinding(evt, placeBinding)) {
+      startPlace();
     }
   };
   const onMouseUp = (evt) => {
-    if (evt.button === 0) {
-      mouseButtons.left = false;
-      if (opts.blockBreaker) opts.blockBreaker._mouseDown = false;
-      if (opts.blockBreaker && typeof opts.blockBreaker.stopBreaking === 'function') {
-        opts.blockBreaker.stopBreaking();
-      }
-    } else if (evt.button === 2) {
-      mouseButtons.right = false;
-      stopPlacing();
+    if (eventMatchesBinding(evt, attackBinding)) {
+      stopAttack();
+    } else if (eventMatchesBinding(evt, placeBinding)) {
+      stopPlace();
+    }
+  };
+
+  const onKeyDown = (evt) => {
+    if (shouldDisableInput && shouldDisableInput()) return;
+    if (eventMatchesBinding(evt, attackBinding)) {
+      evt.preventDefault();
+      startAttack();
+    } else if (eventMatchesBinding(evt, placeBinding)) {
+      evt.preventDefault();
+      startPlace();
+    }
+  };
+
+  const onKeyUp = (evt) => {
+    if (eventMatchesBinding(evt, attackBinding)) {
+      evt.preventDefault();
+      stopAttack();
+    } else if (eventMatchesBinding(evt, placeBinding)) {
+      evt.preventDefault();
+      stopPlace();
     }
   };
 
@@ -141,6 +202,8 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
 
   domElement.addEventListener('mousedown', onMouseDown);
   domElement.addEventListener('mouseup', onMouseUp);
+  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keyup', onKeyUp);
 
   return {
     dispose() {
@@ -148,6 +211,8 @@ export function initInteraction(cm, camera, domElement, opts = {}) {
       domElement.removeEventListener('contextmenu', onContextMenu);
       domElement.removeEventListener('mousedown', onMouseDown);
       domElement.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
     }
   };
 }

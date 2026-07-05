@@ -348,6 +348,8 @@ export class HUD {
       }
 
       .inventory-slot {
+        height: 32px;
+        width: 32px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -384,27 +386,15 @@ export class HUD {
         background: #aeaeae;
       }
 
-      .inventory-slot.selected {
-        border: 1px solid #ffff00;
-        box-shadow: inset 0 1px 2px rgba(255, 255, 0, 0.6), 0 0 4px rgba(255, 255, 0, 0.6);
-      }
-
       .inventory-slot.dragging {
         opacity: 0.5;
         transform: scale(0.95);
-      }
-
-      .inventory-slot.drop-target {
-        background: rgba(255, 255, 255, 0.2);
-        border: 2px solid #ffff00;
       }
 
       .drag-preview {
         background-size: contain;
         background-repeat: no-repeat;
         background-position: center;
-        border-radius: 4px;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
       }
     `.trim();
     document.head.appendChild(style);
@@ -430,9 +420,11 @@ export class HUD {
       
       if (i < fullHearts) {
         heart.style.backgroundImage = `url('assets/textures/gui/sprites/hud/heart/full.png')`;
-      } else if (i === fullHearts && hasHalfHeart) {
+      } 
+      else if (i === fullHearts && hasHalfHeart) {
         heart.style.backgroundImage = `url('assets/textures/gui/sprites/hud/heart/half.png')`;
-      } else {
+      } 
+      else {
         heart.style.backgroundImage = `url('assets/textures/gui/sprites/hud/heart/container.png')`;
       }
       
@@ -453,9 +445,11 @@ export class HUD {
       
       if (i < fullDrumsticks) {
         drumstick.style.backgroundImage = "url('assets/textures/gui/sprites/hud/food_full.png')";
-      } else if (i === fullDrumsticks && hasHalfDrumstick) {
+      } 
+      else if (i === fullDrumsticks && hasHalfDrumstick) {
         drumstick.style.backgroundImage = "url('assets/textures/gui/sprites/hud/food_half.png')";
-      } else {
+      } 
+      else {
         drumstick.style.backgroundImage = "url('assets/textures/gui/sprites/hud/food_empty.png')";
       }
       drumstick.style.backgroundRepeat = 'no-repeat';
@@ -532,9 +526,6 @@ export class HUD {
     const renderFrame = () => {
       const activePreview = this.inventoryAvatarPreview;
       if (!activePreview) return;
-
-      const elapsed = (performance.now() - activePreview.startAt) * 0.001;
-
       // Keep a fixed facing direction in the inventory preview.
       activePreview.avatarRoot.rotation.y = Math.PI;
       activePreview.avatarHead.rotation.y = activePreview.headYaw || 0;
@@ -672,27 +663,6 @@ export class HUD {
       avatarRoot.position.y = -0.78;
       scene.add(avatarRoot);
 
-      // Add mouse tracking for head rotation
-      const mouseHandler = (event) => {
-        const rect = avatarCanvas.getBoundingClientRect();
-        const centerX = rect.width / 2;
-        const centerY = rect.height / 2;
-        const x = event.clientX - rect.left - centerX;
-        const y = event.clientY - rect.top - centerY;
-        
-        // Horizontal angle (yaw)
-        const maxYaw = Math.PI / 4; // 45 degrees max
-        const yaw = (x / centerX) * maxYaw;
-        
-        // Vertical angle (pitch)
-        const maxPitch = Math.PI / 6; // 30 degrees max
-        const pitch = -(y / centerY) * maxPitch; // Negative because up should tilt head up
-        
-        this.inventoryAvatarPreview.headYaw = yaw;
-        this.inventoryAvatarPreview.headPitch = pitch;
-      };
-      // Note: Mouse handler will be added to inventory window instead
-
       this.inventoryAvatarPreview = {
         renderer,
         scene,
@@ -739,8 +709,8 @@ export class HUD {
       if (crosshair) crosshair.style.display = '';
 
       try {
-        // Try to request pointer lock on the first canvas element (Three renderer)
-        const canvas = document.querySelector('canvas');
+        const canvas = document.getElementById('game-canvas') ||
+          document.querySelector('canvas:not(.inventory-avatar-canvas)');
         if (!document.pointerLockElement && canvas && canvas.requestPointerLock) {
           const maybePromise = canvas.requestPointerLock();
           if (maybePromise && typeof maybePromise.catch === 'function') {
@@ -817,11 +787,9 @@ export class HUD {
       const gap = parseFloat(gridCS.columnGap || gridCS.gap) || 1;
       
       grid.innerHTML = '';
-      let slotpxsize = 32;
       for (let i = 0; i < 27; i++) {
         const slot = document.createElement('div');
         slot.className = 'inventory-slot';
-        slot.style.width = slot.style.height = slotpxsize + 'px';
         slot.dataset.slot = i;
         slot.dataset.type = 'inventory';
 
@@ -860,7 +828,6 @@ export class HUD {
       for (let i = 0; i < 4; i++) {
         const slot = document.createElement('div');
         slot.className = 'inventory-slot';
-        slot.style.width = slot.style.height = slotpxsize + 'px';
         slot.dataset.slot = i;
         slot.dataset.type = 'armor';
         slot.dataset.armor = armorNames[i];
@@ -871,7 +838,7 @@ export class HUD {
         armorContainer.appendChild(slot);
       }
 
-      this.createInventoryAvatar(avatarContainer, slotpxsize);
+      this.createInventoryAvatar(avatarContainer);
 
       // Add mouse tracking for head rotation to the inventory overlay
       const mouseHandler = (event) => {
@@ -901,13 +868,11 @@ export class HUD {
       middleStack.innerHTML = '';
       const offhandSlot = document.createElement('div');
       offhandSlot.className = 'inventory-slot';
-      offhandSlot.style.width = offhandSlot.style.height = slotpxsize + 'px';
       offhandSlot.dataset.type = 'offhand';
       middleStack.appendChild(offhandSlot);
 
       const recipeSlot = document.createElement('div');
       recipeSlot.className = 'inventory-slot';
-      recipeSlot.style.width = recipeSlot.style.height = slotpxsize + 'px';
       recipeSlot.dataset.type = 'recipe';
       middleStack.appendChild(recipeSlot);
 
@@ -916,14 +881,12 @@ export class HUD {
       for (let i = 0; i < 4; i++) {
         const slot = document.createElement('div');
         slot.className = 'inventory-slot';
-        slot.style.width = slot.style.height = slotpxsize + 'px';
         slot.dataset.type = 'crafting';
         slot.dataset.slot = i;
         craftingGrid.appendChild(slot);
       }
       const outputSlot = document.createElement('div');
       outputSlot.className = 'inventory-slot';
-      outputSlot.style.width = outputSlot.style.height = slotpxsize + 'px';
       outputSlot.dataset.type = 'crafting-output';
       craftingOutput.appendChild(outputSlot);
 
@@ -935,7 +898,6 @@ export class HUD {
         const slot = document.createElement('div');
         slot.className = 'inventory-slot';
         if (i === this.selectedSlot) slot.classList.add('selected');
-        slot.style.width = slot.style.height = slotpxsize + 'px';
         slot.dataset.slot = i;
         slot.dataset.type = 'hotbar';
 
@@ -1182,7 +1144,7 @@ export class HUD {
     dragPreview.style.position = 'fixed';
     dragPreview.style.pointerEvents = 'none';
     dragPreview.style.zIndex = '10000';
-    dragPreview.style.opacity = '0.8';
+    
     
     document.body.appendChild(dragPreview);
     

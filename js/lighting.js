@@ -306,7 +306,7 @@ export function getCombinedLight(skyLight, blockLight, lx, ly, lz, timeOfDay = 0
 
 /**
  * Get brightness multiplier based on time of day
- * Returns 0.25 to 1 (moonlight to full sun)
+ * Returns 0.5 to 1 (bright moonlight to full sun)
  */
 function getDayBrightness(timeOfDay) {
   // timeOfDay 0.25 = 6 AM (sunrise), 0.5 = noon, 0.75 = 6 PM (sunset), 0/1 = midnight
@@ -314,7 +314,7 @@ function getDayBrightness(timeOfDay) {
   const t = timeOfDay % 1;
   const angle = (t - 0.25) * Math.PI * 2; // Shift so noon is at peak
   const raw = (Math.sin(angle) + 1) / 2; // 0 to 1
-  return 0.25 + raw * 0.75;
+  return 0.5 + raw * 0.5;
 }
 
 /**
@@ -324,8 +324,8 @@ function getDayBrightness(timeOfDay) {
  */
 export function lightToRenderBrightness(lightLevel) {
   const normalizedLevel = Math.max(0, Math.min(15, lightLevel)) / 15;
-  const minBrightness = 0.1; // 20% at level 0
-  const maxBrightness = 1.0;  // 100% at level 15
+  const minBrightness = 0.2; // 20% at level 0
+  const maxBrightness = 2.0;  // 100% at level 15
   const brightness = minBrightness * Math.pow(maxBrightness / minBrightness, normalizedLevel);
   return brightness;
 }

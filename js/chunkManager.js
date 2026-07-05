@@ -181,7 +181,7 @@ export default class ChunkManager {
     const columns = Math.max(1, Math.ceil(Math.sqrt(textureCount)));
     const rows = Math.max(1, Math.ceil(textureCount / columns));
     const tileSize = 16;
-    const gutter = 1;
+    const gutter = 4;
     const cellSize = tileSize + gutter * 2;
 
     const canvas = document.createElement('canvas');
@@ -232,17 +232,15 @@ export default class ChunkManager {
           ctx.clearRect(pixelX - gutter, pixelY - gutter, tileSize + gutter * 2, tileSize + gutter * 2);
           ctx.drawImage(image, pixelX, pixelY, tileSize, tileSize);
 
-          // Duplicate edge texels into a 1px gutter to avoid mipmap bleeding.
-          ctx.drawImage(image, 0, 0, 1, image.height, pixelX - 1, pixelY, 1, tileSize);
-          ctx.drawImage(image, image.width - 1, 0, 1, image.height, pixelX + tileSize, pixelY, 1, tileSize);
-          ctx.drawImage(image, 0, 0, image.width, 1, pixelX, pixelY - 1, tileSize, 1);
-          ctx.drawImage(image, 0, image.height - 1, image.width, 1, pixelX, pixelY + tileSize, tileSize, 1);
+          ctx.drawImage(image, 0, 0, 1, image.height, pixelX - gutter, pixelY, gutter, tileSize);
+          ctx.drawImage(image, image.width - 1, 0, 1, image.height, pixelX + tileSize, pixelY, gutter, tileSize);
+          ctx.drawImage(image, 0, 0, image.width, 1, pixelX, pixelY - gutter, tileSize, gutter);
+          ctx.drawImage(image, 0, image.height - 1, image.width, 1, pixelX, pixelY + tileSize, tileSize, gutter);
 
-          // Fill gutter corners as well.
-          ctx.drawImage(image, 0, 0, 1, 1, pixelX - 1, pixelY - 1, 1, 1);
-          ctx.drawImage(image, image.width - 1, 0, 1, 1, pixelX + tileSize, pixelY - 1, 1, 1);
-          ctx.drawImage(image, 0, image.height - 1, 1, 1, pixelX - 1, pixelY + tileSize, 1, 1);
-          ctx.drawImage(image, image.width - 1, image.height - 1, 1, 1, pixelX + tileSize, pixelY + tileSize, 1, 1);
+          ctx.drawImage(image, 0, 0, 1, 1, pixelX - gutter, pixelY - gutter, gutter, gutter);
+          ctx.drawImage(image, image.width - 1, 0, 1, 1, pixelX + tileSize, pixelY - gutter, gutter, gutter);
+          ctx.drawImage(image, 0, image.height - 1, 1, 1, pixelX - gutter, pixelY + tileSize, gutter, gutter);
+          ctx.drawImage(image, image.width - 1, image.height - 1, 1, 1, pixelX + tileSize, pixelY + tileSize, gutter, gutter);
 
           atlasTexture.needsUpdate = true;
         },
@@ -609,12 +607,12 @@ export default class ChunkManager {
     return light;
   }
 
-  // Get brightness multiplier based on time of day (0.25 to 1.0)
+  // Get brightness multiplier based on time of day (0.5 to 1.0)
   _getDayBrightness(timeOfDay) {
     const t = timeOfDay % 1;
     const angle = (t - 0.25) * Math.PI * 2;
     const raw = (Math.sin(angle) + 1) / 2;
-    return 0.25 + raw * 0.75;
+    return 0.5 + raw * 0.5;
   }
 
   _loadChunk(cx, cz) {

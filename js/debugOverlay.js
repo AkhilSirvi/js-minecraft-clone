@@ -76,8 +76,6 @@ export default function createDebugOverlay() {
   document.body.appendChild(el);
 
   let fpsSmoothed = 60;
-  let lastDebugLog = 0;
-  const DEBUG_LOG_INTERVAL = 1000; // Log to chat every 1 second
 
   function formatNum(n, d=2) { return (Math.round(n * Math.pow(10,d)) / Math.pow(10,d)).toFixed(d); }
 
@@ -106,7 +104,6 @@ export default function createDebugOverlay() {
     toggle() { el.style.display = el.style.display === 'none' ? 'block' : 'none'; },
     update(info) {
       // info: { delta, playerPos, chunkX,chunkZ, fps, lookVec, target, loadedChunks }
-      const time = performance.now();
       if (info && info.delta) {
         const instFPS = 1 / info.delta;
         fpsSmoothed = fpsSmoothed * 0.9 + instFPS * 0.1;

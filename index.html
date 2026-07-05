@@ -12,6 +12,7 @@
         height: 100%;
         overflow: hidden;
         font-family: Arial, Helvetica, sans-serif;
+        background: url('assets/textures/gui/menu_background.png') repeat;
       }
 
       canvas {
@@ -57,7 +58,6 @@
         left: 0;
         width: 100%;
         height: 100%;
-        background: linear-gradient(180deg, #78a7ff 0%, #c9e4ff 50%, #90c956 50%, #5a8f3a 100%);
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -71,17 +71,11 @@
       }
 
       #menu-title {
-        font-size: 72px;
+        font-size: 23px;
         font-weight: bold;
         color: #fff;
-        text-shadow: 
-          4px 4px 0 #3f3f3f,
-          -2px -2px 0 #3f3f3f,
-          2px -2px 0 #3f3f3f,
-          -2px 2px 0 #3f3f3f,
-          0 6px 10px rgba(0,0,0,0.4);
+        text-shadow: 4px 4px 0 #000000, -2px -2px 0 #3f3f3f, 2px -2px 0 #3f3f3f, -2px 2px 0 #3f3f3f, 0 6px 10px rgba(0, 0, 0, 0.4);
         margin-bottom: 60px;
-        letter-spacing: 4px;
       }
 
       @keyframes titleFloat {
@@ -89,69 +83,22 @@
         50% { transform: translateY(-10px); }
       }
 
-      #menu-subtitle {
-        font-size: 18px;
-        color: #fff;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        margin-bottom: 40px;
-        opacity: 0.9;
-      }
-
       .menu-button {
-        background: linear-gradient(180deg, #7cb342 0%, #558b2f 100%);
-        border: 4px solid #33691e;
-        border-radius: 6px;
+        background: url('assets/textures/gui/button.png') no-repeat;
+        background-size: contain;
+        image-rendering: pixelated;
+        text-align: center;
         color: #fff;
-        font-size: 24px;
-        font-weight: bold;
-        padding: 16px 80px;
-        margin: 10px;
+        font-size: 18px;
         cursor: pointer;
-        text-shadow: 2px 2px 2px rgba(0,0,0,0.4);
-        box-shadow: 0 6px 0 #33691e, 0 8px 15px rgba(0,0,0,0.3);
-        transition: all 0.1s ease;
-        text-transform: uppercase;
-        letter-spacing: 2px;
+        width: 300px;
+        height: 40px;
       }
 
       .menu-button:hover {
-        background: linear-gradient(180deg, #8bc34a 0%, #689f38 100%);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 0 #33691e, 0 10px 20px rgba(0,0,0,0.3);
+          background: url('assets/textures/gui/button_highlighted.png') no-repeat ;
+          background-size: contain;
       }
-
-      .menu-button:active {
-        transform: translateY(4px);
-        box-shadow: 0 2px 0 #33691e, 0 4px 10px rgba(0,0,0,0.3);
-      }
-
-      #menu-footer {
-        position: absolute;
-        bottom: 20px;
-        font-size: 14px;
-        color: rgba(255,255,255,0.7);
-        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-      }
-
-      /* Decorative blocks */
-      .menu-block {
-        position: absolute;
-        width: 60px;
-        height: 60px;
-        background: #8b6914;
-        border: 3px solid #5d4e37;
-        box-shadow: inset 0 0 10px rgba(0,0,0,0.3);
-        opacity: 0.6;
-      }
-
-      .menu-block.grass {
-        background: linear-gradient(180deg, #4a7c23 0%, #4a7c23 30%, #8b6914 30%, #8b6914 100%);
-      }
-
-      .menu-block:nth-child(1) { top: 10%; left: 5%; transform: rotate(15deg); }
-      .menu-block:nth-child(2) { top: 20%; right: 8%; transform: rotate(-10deg); }
-      .menu-block:nth-child(3) { bottom: 15%; left: 10%; transform: rotate(25deg); }
-      .menu-block:nth-child(4) { bottom: 25%; right: 5%; transform: rotate(-20deg); }
 
       /* Loading indicator */
       #loading-text {
@@ -182,12 +129,80 @@
         z-index: 10001;
       }
 
+      /* World Creation Menu */
+      #world-create-menu {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.82);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10001;
+      }
+
+      #world-create-menu.hidden {
+        display: none;
+      }
+
+      #world-create-panel {
+        background: #070e14;
+        border: 4px solid #1a1a1a;
+        border-radius: 8px;
+        width: min(520px, 92vw);
+        padding: 28px 30px;
+      }
+
+      #world-create-title {
+        margin: 0 0 22px;
+        color: #fff;
+        font-size: 30px;
+        font-weight: 700;
+        text-align: center;
+      }
+
+      .world-create-field {
+        margin-bottom: 16px;
+      }
+
+      .world-create-label {
+        display: block;
+        color: #d9d9d9;
+        font-size: 15px;
+        margin-bottom: 8px;
+      }
+
+      .world-create-input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 2px solid #1f1f1f;
+        background: #1a1a1a;
+        color: #f3f3f3;
+        font-size: 16px;
+        padding: 12px 10px;
+        border-radius: 4px;
+        outline: none;
+      }
+
+      .world-create-input:focus {
+        border-color: #7cb342;
+      }
+
+      .world-create-buttons {
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+        margin-top: 24px;
+      }
+
       #settings-menu.hidden {
         display: none;
       }
 
       #settings-panel {
-        background: linear-gradient(180deg, #3d3d3d 0%, #2a2a2a 100%);
+        background: #070e14;
         border: 4px solid #1a1a1a;
         border-radius: 8px;
         padding: 30px 50px;
@@ -203,7 +218,6 @@
         font-weight: bold;
         color: #fff;
         text-align: center;
-        margin-bottom: 30px;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
       }
 
@@ -214,7 +228,7 @@
       .settings-section-title {
         font-size: 18px;
         font-weight: bold;
-        color: #7cb342;
+        color: #f3f3f3;
         margin-bottom: 15px;
         padding-bottom: 5px;
         border-bottom: 2px solid #4a4a4a;
@@ -224,8 +238,7 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 15px;
-        padding: 8px 0;
+        padding: 4px 0;
       }
 
       .setting-label {
@@ -244,6 +257,42 @@
       .setting-control {
         display: flex;
         align-items: center;
+      }
+
+      input[type="number"],
+      input[type="text"] {
+        width: 110px;
+        padding: 6px 8px;
+        border: 2px solid #3f3f3f;
+        border-radius: 4px;
+        background: #232323;
+        color: #e7e7e7;
+        font-size: 14px;
+        outline: none;
+      }
+
+      input[type="number"]:focus {
+        border-color: #7cb342;
+      }
+
+      input[type="text"] {
+        width: 160px;
+        text-align: center;
+      }
+
+      input[type="text"]:focus {
+        border-color: #7cb342;
+      }
+
+      .keybind-input {
+        cursor: pointer;
+      }
+
+      .controls-hint {
+        margin: 0 0 12px;
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 12px;
+        line-height: 1.4;
       }
 
       input[type="range"] {
@@ -331,34 +380,59 @@
         right: 10px;
         font-size: 10px;
         color: rgba(255, 255, 255, 0.6);
-        z-index: 1;
+        z-index: 1000000000;
         font-family: Arial, sans-serif;
+      }
+
+      #minecraft_image {
+        width: 452px;
+        height: 79px;
+        background-image: url('assets/textures/gui/minecraft.png');
+        background-size: cover;
+        background-repeat: no-repeat;
       }
     </style>
   </head>
   <body>
     <!-- Main Menu -->
     <div id="main-menu">
-      <div class="menu-block grass"></div>
-      <div class="menu-block"></div>
-      <div class="menu-block grass"></div>
-      <div class="menu-block"></div>
+      <div id="minecraft_image"></div>
+      <div id="menu-title">JAVASCRIPT EDITION</div>
       
-      <h1 id="menu-title">MINECRAFT JS</h1>
-      <p id="menu-subtitle">A JavaScript Minecraft Clone</p>
-      
-      <button id="play-button" class="menu-button">Play</button>
-      <button id="settings-button" class="menu-button">Settings</button>
+      <div id="play-button" class="menu-button">SinglePlayer</div>
+      <div id="settings-button" class="menu-button">Options... </div>
       
       <div id="loading-text">Loading world...</div>
       
-      <div id="menu-footer">Click Play to start your adventure</div>
+      
+    </div>
+
+    <!-- World Creation Menu -->
+    <div id="world-create-menu" class="hidden">
+      <div id="world-create-panel">
+        <h2 id="world-create-title">Create New World</h2>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="world-name-input">World Name</label>
+          <input id="world-name-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" maxlength="32" value="New World" />
+        </div>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="world-seed-input">Seed</label>
+          <input id="world-seed-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" maxlength="64" placeholder="Leave blank for random" />
+        </div>
+
+        <div class="world-create-buttons">
+          <button id="world-back-button" class="settings-button">Back</button>
+          <button id="create-world-button" class="settings-button primary">Create World</button>
+        </div>
+      </div>
     </div>
 
     <!-- Settings Menu -->
     <div id="settings-menu" class="hidden">
       <div id="settings-panel">
-        <h2 id="settings-title">Settings</h2>
+        <div id="settings-title">Settings</div>
         
         <div class="settings-section">
           <div class="settings-section-title">Graphics</div>
@@ -378,10 +452,114 @@
               <span class="setting-value" id="fov-value">75°</span>
             </div>
           </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Near Clip</span>
+            <div class="setting-control">
+              <input type="number" id="setting-near-clip" min="0.01" max="10" step="0.01" value="0.1">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Far Clip</span>
+            <div class="setting-control">
+              <input type="number" id="setting-far-clip" min="100" max="5000" step="10" value="1000">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Max Pixel Ratio</span>
+            <div class="setting-control">
+              <input type="range" id="setting-max-pixel-ratio" min="0.5" max="2.5" step="0.05" value="1.5">
+              <span class="setting-value" id="max-pixel-ratio-value">1.50x</span>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Smooth Lighting</span>
+            <div class="setting-control">
+              <input type="checkbox" id="setting-smooth-lighting">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Frustum Culling</span>
+            <div class="setting-control">
+              <input type="checkbox" id="setting-frustum-culling" checked>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Chunk Streaming</div>
+
+          <div class="setting-row">
+            <span class="setting-label">Load Queue Interval (ms)</span>
+            <div class="setting-control">
+              <input type="number" id="setting-load-queue-interval" min="1" max="1000" step="1" value="50">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Idle Callback Timeout (ms)</span>
+            <div class="setting-control">
+              <input type="number" id="setting-idle-timeout" min="1" max="1000" step="1" value="16">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Idle Min Time (ms)</span>
+            <div class="setting-control">
+              <input type="number" id="setting-idle-min-time" min="1" max="100" step="1" value="2">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Max Loads Per Idle</span>
+            <div class="setting-control">
+              <input type="number" id="setting-max-loads-per-idle" min="1" max="50" step="1" value="1">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Max Finalizations Per Frame</span>
+            <div class="setting-control">
+              <input type="number" id="setting-max-finalizations-per-frame" min="1" max="50" step="1" value="1">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Max Neighbor Rebuilds Per Frame</span>
+            <div class="setting-control">
+              <input type="number" id="setting-max-neighbor-rebuilds-per-frame" min="1" max="50" step="1" value="1">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Max Unloads Per Frame</span>
+            <div class="setting-control">
+              <input type="number" id="setting-max-unloads-per-frame" min="1" max="100" step="1" value="2">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Load Queue Retry Delay (ms)</span>
+            <div class="setting-control">
+              <input type="number" id="setting-load-queue-retry-delay" min="1" max="1000" step="1" value="8">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Load Queue Force Progress (ms)</span>
+            <div class="setting-control">
+              <input type="number" id="setting-load-queue-force-progress" min="1" max="5000" step="1" value="120">
+            </div>
+          </div>
         </div>
         
         <div class="settings-section">
           <div class="settings-section-title">Controls</div>
+          <p class="controls-hint">Click a binding, then press a key or a mouse button to rebind it.</p>
           
           <div class="setting-row">
             <span class="setting-label">Mouse Sensitivity</span>
@@ -390,16 +568,179 @@
               <span class="setting-value" id="sensitivity-value">10</span>
             </div>
           </div>
-        </div>
-        
-        <div class="settings-section">
-          <div class="settings-section-title">Audio</div>
-          
+
           <div class="setting-row">
-            <span class="setting-label">Master Volume</span>
+            <span class="setting-label">Toggle Debug</span>
             <div class="setting-control">
-              <input type="range" id="setting-volume" min="0" max="100" value="100">
-              <span class="setting-value" id="volume-value">100%</span>
+              <input type="text" id="setting-key-toggle-debug" class="keybind-input" readonly value="F3">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Open Chat</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-open-chat" class="keybind-input" readonly value="KeyT">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Toggle Spectator</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-toggle-spectator" class="keybind-input" readonly value="KeyH">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Toggle Third Person</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-third-person" class="keybind-input" readonly value="F5">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Toggle Chunk Borders</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-chunk-borders" class="keybind-input" readonly value="KeyB">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Attack</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-attack" class="keybind-input" readonly value="Mouse Left">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Place</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-place" class="keybind-input" readonly value="Mouse Right">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Place Water</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-place-water" class="keybind-input" readonly value="KeyQ">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Move Forward</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-move-forward" class="keybind-input" readonly value="KeyW">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Move Backward</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-move-backward" class="keybind-input" readonly value="KeyS">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Move Left</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-move-left" class="keybind-input" readonly value="KeyA">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Move Right</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-move-right" class="keybind-input" readonly value="KeyD">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Sprint</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-sprint" class="keybind-input" readonly value="ControlLeft">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Crouch</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-crouch" class="keybind-input" readonly value="ShiftLeft">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Jump</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-jump" class="keybind-input" readonly value="Space">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Inventory</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-inventory" class="keybind-input" readonly value="KeyE">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 1</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-1" class="keybind-input" readonly value="Digit1">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 2</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-2" class="keybind-input" readonly value="Digit2">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 3</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-3" class="keybind-input" readonly value="Digit3">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 4</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-4" class="keybind-input" readonly value="Digit4">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 5</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-5" class="keybind-input" readonly value="Digit5">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 6</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-6" class="keybind-input" readonly value="Digit6">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 7</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-7" class="keybind-input" readonly value="Digit7">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 8</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-8" class="keybind-input" readonly value="Digit8">
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <span class="setting-label">Hotbar Slot 9</span>
+            <div class="setting-control">
+              <input type="text" id="setting-key-slot-9" class="keybind-input" readonly value="Digit9">
             </div>
           </div>
         </div>

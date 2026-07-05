@@ -9,7 +9,7 @@ export class ItemRenderer {
     this.scenes = new Map();
     this.renderers = new Map();
     this.meshes = new Map();
-    this.itemSize = 64; // Canvas size for each item quality
+    this.itemSize = 512; // Canvas size for each item quality
   }
 
   getItemCanvas(blockId) {

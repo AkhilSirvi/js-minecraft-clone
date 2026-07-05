@@ -196,7 +196,6 @@ export default class BlockBreaker {
       const pz = this.target.bz + 0.5;
       const blockId = this.target.bid;
       this.cm.setBlockAtWorld(px, py, pz, BLOCK.AIR);
-      // Call callback to notify that block was broken (for item drops, etc)
       if (this.onBlockBroken) {
         this.onBlockBroken(px, py, pz, blockId);
       }

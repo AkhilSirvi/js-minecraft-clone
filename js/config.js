@@ -1,12 +1,16 @@
 // config.js
 // All configurable game parameters in one place
 
-function seedToNumber(str) {
-  if (!isNaN(str)) return Number(str);
+export function seedToNumber(str) {
+  const normalized = String(str ?? '');
+  if (!isNaN(normalized)) {
+    const numericSeed = Number(normalized);
+    if (Number.isFinite(numericSeed)) return numericSeed;
+  }
   
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < normalized.length; i++) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) >>> 0;
   }
   return hash;
 }
@@ -57,7 +61,7 @@ export const RENDER = {
   fov: 75,                               // camera field of view
   nearClip: 0.1,                         // near clipping plane
   farClip: 1000,                         // far clipping plane
-  maxPixelRatio: 1.25,                   // cap DPR to reduce GPU/frame-time spikes on chunk loads
+  maxPixelRatio: 1.5,                   // cap DPR to reduce GPU/frame-time spikes on chunk loads
   smoothLighting: false,                 // interpolate lighting across block faces (more expensive)
   enableFrustumCulling: true,            // GPU frustum culling
   chunkStreaming: {
@@ -120,7 +124,7 @@ export const DAY_NIGHT = {
   nightLength: 7 * 60,      // night duration (seconds) - 7 minutes
   
 
-  skyDayColor: 0x9bbdfa,         
+  skyDayColor: 0Xbcd4ff,         
   skyDayHorizonColor: 0xB8D4FF,  
   skyNightColor: 0x000000,       
   skyNightHorizonColor: 0x122a5b,
