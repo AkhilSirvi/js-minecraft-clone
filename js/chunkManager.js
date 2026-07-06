@@ -64,6 +64,7 @@ export default class ChunkManager {
     this.materials = this._createMaterials();
     // async load queue to avoid blocking the main thread
     this._loadQueue = [];
+    this._queuedKeys = new Map(); // key -> queue item, for O(1) dup checks + priority updates
     this._isProcessingQueue = false;
     // Finalization queue to spread expensive main-thread work across frames
     this._finalizationQueue = [];
@@ -1087,15 +1088,14 @@ export default class ChunkManager {
   queueLoad(cx, cz, priority = 0) {
     const key = this._key(cx, cz);
     if (this.chunks.has(key)) return;
-    for (let i = 0; i < this._loadQueue.length; i++) {
-      if (this._loadQueue[i].key === key) {
-        if (priority < this._loadQueue[i].priority) {
-          this._loadQueue[i].priority = priority;
-        }
-        return;
-      }
+    const existing = this._queuedKeys.get(key);
+    if (existing) {
+      if (priority < existing.priority) existing.priority = priority;
+      return;
     }
-    this._loadQueue.push({ key, cx, cz, priority, queuedAt: performance.now() });
+    const item = { key, cx, cz, priority, queuedAt: performance.now() };
+    this._queuedKeys.set(key, item);
+    this._loadQueue.push(item);
   }
 
   _applyChunkOverrides(cx, cz, data) {
@@ -1143,7 +1143,9 @@ export default class ChunkManager {
       let submitted = 0;
       while (this._loadQueue.length > 0 && submitted < this._maxLoadsPerIdle) {
         const item = this._loadQueue.shift();
-        if (!item || this.chunks.has(item.key)) continue;
+        if (!item) continue;
+        this._queuedKeys.delete(item.key);
+        if (this.chunks.has(item.key)) continue;
 
         try {
           if (this._chunkWorker) {
@@ -1377,7 +1379,11 @@ export default class ChunkManager {
 
     // Clean up load queue for chunks outside view distance
     const originalQueueLength = this._loadQueue.length;
-    this._loadQueue = this._loadQueue.filter(item => wanted.has(item.key));
+    this._loadQueue = this._loadQueue.filter(item => {
+      const keep = wanted.has(item.key);
+      if (!keep) this._queuedKeys.delete(item.key);
+      return keep;
+    });
     const removedFromQueue = originalQueueLength - this._loadQueue.length;
     
     if (DEBUG.logChunkLoading && removedFromQueue > 0) {
@@ -1798,6 +1804,7 @@ export default class ChunkManager {
     
     // Clear load queue
     this._loadQueue = [];
+    this._queuedKeys.clear();
     
     // Clear finalization queue
     this._finalizationQueue = [];
