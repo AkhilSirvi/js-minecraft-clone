@@ -85,7 +85,7 @@ export class HUD {
         height: 100%;
         pointer-events: none;
         z-index: 1000;
-        font-family: 'Minecraftia', 'Arial', sans-serif;
+        font-family: Minecraft;
       }
 
       .hud-element {

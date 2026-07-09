@@ -61,6 +61,12 @@ export default class ChunkManager {
     this._debugOverlay = options.debugOverlay ?? null;
     if (this._debugOverlay && DEBUG.logChunkLoading) this._debugOverlay.pushMessage(`ChunkManager init — view=${this.viewDistance}`, { duration: 2500 });
     const chunkStreaming = RENDER.chunkStreaming || {};
+
+    this._renderer = options.renderer ?? null;
+    this.anisotropicFiltering = options.anisotropicFiltering !== false;
+    this._maxAnisotropyCache = null;
+    this._anisoTextures = [];
+
     this.materials = this._createMaterials();
     // async load queue to avoid blocking the main thread
     this._loadQueue = [];
@@ -176,13 +182,55 @@ export default class ChunkManager {
     return [ru, rv];
   }
 
+  _getMaxAnisotropy() {
+    if (this._maxAnisotropyCache !== null) return this._maxAnisotropyCache;
+    let max = 1;
+    try {
+      if (this._renderer && this._renderer.capabilities && typeof this._renderer.capabilities.getMaxAnisotropy === 'function') {
+        max = this._renderer.capabilities.getMaxAnisotropy() || 1;
+      }
+    } catch (e) {
+      max = 1;
+    }
+    this._maxAnisotropyCache = max;
+    return max;
+  }
+
+  _hasImageData(texture) {
+    const img = texture && texture.image;
+    if (!img) return false;
+    if (typeof HTMLCanvasElement !== 'undefined' && img instanceof HTMLCanvasElement) return true;
+    if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) return true;
+    if ('complete' in img) return !!img.complete && (img.naturalWidth || img.width) > 0;
+    return !!(img.width && img.height);
+  }
+
+  _applyAnisotropy(texture) {
+    if (!texture) return texture;
+    const maxAniso = this._getMaxAnisotropy();
+    texture.anisotropy = this.anisotropicFiltering ? maxAniso : 1;
+    if (this._hasImageData(texture)) texture.needsUpdate = true;
+    if (!this._anisoTextures.includes(texture)) this._anisoTextures.push(texture);
+    return texture;
+  }
+
+  setAnisotropicFiltering(enabled) {
+    this.anisotropicFiltering = !!enabled;
+    const maxAniso = this._getMaxAnisotropy();
+    for (const tex of this._anisoTextures) {
+      if (!tex) continue;
+      tex.anisotropy = this.anisotropicFiltering ? maxAniso : 1;
+      if (this._hasImageData(tex)) tex.needsUpdate = true;
+    }
+  }
+
   _createBlockAtlas() {
     const textureEntries = Object.entries(BLOCK_TEXTURES);
     const textureCount = textureEntries.length;
     const columns = Math.max(1, Math.ceil(Math.sqrt(textureCount)));
     const rows = Math.max(1, Math.ceil(textureCount / columns));
     const tileSize = 16;
-    const gutter = 4;
+    const gutter = 16;
     const cellSize = tileSize + gutter * 2;
 
     const canvas = document.createElement('canvas');
@@ -203,6 +251,7 @@ export default class ChunkManager {
     atlasTexture.magFilter = THREE.NearestFilter;
     atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
     atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+    this._applyAnisotropy(atlasTexture);
     const rectByTextureKey = {};
 
     for (let i = 0; i < textureEntries.length; i++) {
@@ -268,6 +317,7 @@ export default class ChunkManager {
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.minFilter = THREE.NearestMipmapLinearFilter;
       tex.magFilter = THREE.NearestFilter;
+      this._applyAnisotropy(tex);
       return tex;
     };
 

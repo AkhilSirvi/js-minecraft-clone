@@ -23,6 +23,8 @@ export function main(worldOptions = {}) {
   document.title = `${activeWorldName} - MineCraft Clone in JS`;
   window.currentWorld = { name: activeWorldName, seed: activeSeed };
 
+  const ANISOTROPIC_FILTERING = true;
+
   const scene = new THREE.Scene();
   scene.background = null;
 
@@ -172,13 +174,18 @@ export function main(worldOptions = {}) {
   const _cloudNightColor = new THREE.Color(0x191933);
   const _cloudWarmColor = new THREE.Color(0xffd4a0);
   const _cloudTint = new THREE.Color();
+  const _fogNightColor = new THREE.Color(0x000000);
 
   const clouds = createClouds(scene, {
-    planeSize: 2048,
     centerY: 192,
     thickness: 5,
     pixelScale: 10,
   });
+  if (clouds && clouds.materials) {
+    clouds.materials.forEach((mat) => {
+      if (mat) mat.fog = false;
+    });
+  }
 
   const CYCLE_LENGTH = DAY_NIGHT.cycleLength;
   const BASE_TICKS_PER_SECOND = 20; // baseline tick rate (normal speed)
@@ -530,6 +537,14 @@ export function main(worldOptions = {}) {
     }
   });
 
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    powerPreference: "high-performance",
+    stencil: false,
+    preserveDrawingBuffer: false,
+  });
+
   const cm = new ChunkManager(scene, {
     seed: activeSeed,
     blockSize,
@@ -545,7 +560,25 @@ export function main(worldOptions = {}) {
     loadQueueRetryDelayMs: gameSettings.chunkStreaming.loadQueueRetryDelayMs,
     loadQueueForceProgressMs: gameSettings.chunkStreaming.loadQueueForceProgressMs,
     debugOverlay,
+    renderer,
+    anisotropicFiltering: ANISOTROPIC_FILTERING,
   });
+
+  let fogNear = 0;
+  let fogFar = 1000;
+  let _lastFogViewDistance = null;
+  function updateFogDistances() {
+    const renderDistanceWorld = cm.viewDistance * CHUNK_SIZE * blockSize;
+    fogFar = renderDistanceWorld * 0.92;
+    fogNear = fogFar * 0.85;
+    if (scene.fog) {
+      scene.fog.near = fogNear;
+      scene.fog.far = fogFar;
+    }
+    _lastFogViewDistance = cm.viewDistance;
+  }
+  scene.fog = new THREE.Fog(DAY_NIGHT.skyDayColor, fogNear, fogFar);
+  updateFogDistances();
 
   // Make chat accessible globally
   window.gameChat = chat;
@@ -573,6 +606,7 @@ export function main(worldOptions = {}) {
     depthWrite: false,
   });
   if (sunMaterial) sunMaterial.toneMapped = false;
+  sunMaterial.fog = false;
   const sunMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(DAY_NIGHT.sunSize, DAY_NIGHT.sunSize),
     sunMaterial,
@@ -590,6 +624,7 @@ export function main(worldOptions = {}) {
     opacity: 0,
   });
   if (sunBackdropMaterial) sunBackdropMaterial.toneMapped = false;
+  sunBackdropMaterial.fog = false;
   const sunBackdropMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(DAY_NIGHT.sunSize * 0.25, DAY_NIGHT.sunSize * 0.25),
     sunBackdropMaterial,
@@ -616,6 +651,7 @@ export function main(worldOptions = {}) {
     blending: THREE.AdditiveBlending,
   });
   if (moonMaterial) moonMaterial.toneMapped = false;
+  moonMaterial.fog = false;
   const moonMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(DAY_NIGHT.moonSize, DAY_NIGHT.moonSize),
     moonMaterial,
@@ -1154,14 +1190,6 @@ export function main(worldOptions = {}) {
     }
   };
 
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: false,
-    powerPreference: "high-performance",
-    stencil: false,
-    preserveDrawingBuffer: false,
-  });
-  
   // HUD testing functions
   window.hud = hud;
   window.setHealth = (value) => {
@@ -1204,9 +1232,11 @@ export function main(worldOptions = {}) {
   loadingOverlay.style.alignItems = "center";
   loadingOverlay.style.justifyContent = "center";
   loadingOverlay.style.gap = "10px";
-  loadingOverlay.style.background = "linear-gradient(180deg, rgba(14,24,38), rgba(9,15,24))";
+  loadingOverlay.style.background = "linear-gradient(rgba(0, 0, 0, 0.61), rgba(0,0,0,0.61)),url('../assets/textures/block/dirt.png')";
+  loadingOverlay.style.backgroundSize = "64px 64px";
+  loadingOverlay.style.imageRendering = "pixelated";
   loadingOverlay.style.color = "#e8f3ff";
-  loadingOverlay.style.fontFamily = "Minecraftia, monospace";
+  loadingOverlay.style.fontFamily = "Minecraft";
   loadingOverlay.style.zIndex = "12000";
   loadingOverlay.style.pointerEvents = "auto";
 
@@ -1725,6 +1755,12 @@ export function main(worldOptions = {}) {
   let onGround = true;
   let fallDistance = 0;
 
+  // how many physics ticks the player is allowed to be
+  // unsupported (e.g. sprinting over a narrow gap) before gravity actually
+  // kicks in. 
+  const GROUND_CHECK_INTERVAL_TICKS = 4;
+  let groundGraceTicksRemaining = 0;
+
   const gravity = PHYSICS.gravity;
   const jumpSpeed = PHYSICS.jumpSpeed;
   const terminalVelocity = PHYSICS.terminalVelocity;
@@ -1996,6 +2032,12 @@ export function main(worldOptions = {}) {
       startBottomY - currentMaxGround <= GROUND_CONTACT_EPSILON;
 
     if (hasSupportNow) {
+      groundGraceTicksRemaining = GROUND_CHECK_INTERVAL_TICKS;
+    } else if (groundGraceTicksRemaining > 0) {
+      groundGraceTicksRemaining--;
+    }
+
+    if (hasSupportNow || groundGraceTicksRemaining > 0) {
       onGround = true;
       if (velY < 0) velY = 0;
     } else {
@@ -2059,12 +2101,19 @@ export function main(worldOptions = {}) {
         player.position.y = maxGroundY + currentPlayerHeight / 2;
         velY = 0;
         onGround = true;
+        groundGraceTicksRemaining = GROUND_CHECK_INTERVAL_TICKS;
       } else {
         const groundGap = playerBottomY - maxGroundY;
-        onGround = groundGap <= GROUND_CONTACT_EPSILON;
-        if (onGround && velY <= 0) {
-          player.position.y = maxGroundY + currentPlayerHeight / 2;
-          velY = 0;
+        const hasGroundHere = groundGap <= GROUND_CONTACT_EPSILON;
+        if (hasGroundHere) {
+          onGround = true;
+          groundGraceTicksRemaining = GROUND_CHECK_INTERVAL_TICKS;
+          if (velY <= 0) {
+            player.position.y = maxGroundY + currentPlayerHeight / 2;
+            velY = 0;
+          }
+        } else {
+          onGround = groundGraceTicksRemaining > 0;
         }
       }
     } else {
@@ -2077,7 +2126,7 @@ export function main(worldOptions = {}) {
         // Keep onGround state to prevent freefall
         // onGround remains as it was (don't set to false)
       } else {
-        onGround = false;
+        onGround = groundGraceTicksRemaining > 0;
       }
     }
 
@@ -2324,6 +2373,14 @@ export function main(worldOptions = {}) {
     skyDomeMaterial.uniforms.uHorizonColor.value.copy(currentSkyHorizon);
 
     renderer.setClearColor(currentSkyZenith, 1);
+
+    if (scene.fog) {
+      const fogNightFactor = 1 - sunIntensity;
+      scene.fog.color.copy(currentSkyHorizon).lerp(_fogNightColor, fogNightFactor);
+      if (cm.viewDistance !== _lastFogViewDistance) {
+        updateFogDistances();
+      }
+    }
 
     // === STAR FIELD UPDATE ===
     const starOpacity = Math.pow(Math.max(0, 1 - sunIntensity * 1.8), 1.5);

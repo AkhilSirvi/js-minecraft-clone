@@ -21,7 +21,7 @@ export class ChatSystem {
       max-height: 300px;
       display: flex;
       flex-direction: column;
-      font-family: 'Courier New', monospace;
+      font-family: Minecraft;
       z-index: 1;
     `;
     document.body.appendChild(this.chatContainer);
@@ -57,12 +57,12 @@ export class ChatSystem {
     `;
 
     this.inputPrefix = document.createElement('span');
-    this.inputPrefix.textContent = '> ';
+    this.inputPrefix.textContent = 'Player> ';
     this.inputPrefix.style.cssText = `
       color: #0f0;
       font-weight: bold;
       flex-shrink: 0;
-      font-family: 'Courier New', monospace;
+      font-family: Minecraft;
       font-size: 12px;
     `;
     this.inputContainer.appendChild(this.inputPrefix);
@@ -75,7 +75,7 @@ export class ChatSystem {
       background: transparent;
       border: none;
       color: #fff;
-      font-family: 'Courier New', monospace;
+      font-family: Minecraft;
       font-size: 12px;
       outline: none;
       caret-color: #0f0;
@@ -158,7 +158,7 @@ export class ChatSystem {
       }
 
       // Display user input
-      this.addMessage(input, { color: '#fff', prefix: '> ' });
+      this.addMessage(input, { color: '#fff', prefix: 'Player> ' });
 
       // Process command or message
       if (input.startsWith('/')) {
@@ -201,14 +201,14 @@ export class ChatSystem {
     const messageEl = document.createElement('div');
     messageEl.style.cssText = `
       color: ${color};
-      font-size: 12px;
+      font-size: 10px;
       line-height: 1.3;
       max-width: 390px;
       word-wrap: break-word;
       white-space: pre-wrap;
       opacity: 0.95;
       transition: opacity 0.2s;
-      font-family: 'Courier New', monospace;
+      font-family: Minecraft;
       margin: 0px;
       padding: 0px;
     `;

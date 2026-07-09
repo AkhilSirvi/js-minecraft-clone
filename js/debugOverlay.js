@@ -5,7 +5,7 @@ export default function createDebugOverlay() {
   el.style.padding = '6px 10px';
   el.style.background = 'rgba(0,0,0,0.6)';
   el.style.color = '#fff';
-  el.style.fontFamily = 'monospace';
+  el.style.fontFamily = 'Minecraft';
   el.style.fontSize = '12px';
   el.style.lineHeight = '1.2';
   el.style.zIndex = '9999';
@@ -44,7 +44,7 @@ export default function createDebugOverlay() {
     m.style.background = level === 'error' ? 'rgba(160,40,40,0.9)' : 'rgba(0,0,0,0.7)';
     m.style.color = '#fff';
     m.style.padding = '5px 5px';
-    m.style.fontFamily = 'monospace';
+    m.style.fontFamily = 'Minecraft';
     m.style.fontSize = '11px';
     m.style.maxWidth = '420px';
     m.style.boxShadow = '0 4px 14px rgba(0,0,0,0.4)';
