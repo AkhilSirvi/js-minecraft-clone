@@ -23,7 +23,7 @@
         height: 100%;
         overflow: hidden;
         font-family: Minecraft;
-        background: url('assets/textures/gui/menu_background.png') repeat;
+        background: linear-gradient(to bottom, #1a1a1a, #000000);
       }
 
       canvas {
@@ -79,14 +79,6 @@
 
       #main-menu.hidden {
         display: none;
-      }
-
-      #menu-title {
-        font-size: 23px;
-        font-weight: bold;
-        color: #fff;
-        text-shadow: 4px 4px 0 #000000, -2px -2px 0 #3f3f3f, 2px -2px 0 #3f3f3f, -2px 2px 0 #3f3f3f, 0 6px 10px rgba(0, 0, 0, 0.4);
-        margin-bottom: 60px;
       }
 
       @keyframes titleFloat {
@@ -160,11 +152,42 @@
         display: none;
       }
 
+      #multiplayer-menu {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.82);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10001;
+      }
+
+      #multiplayer-menu.hidden {
+        display: none;
+      }
+
+      #multiplayer-panel {
+        background: #070e1480;
+        width: 100%;
+        height: 100%;
+        padding: 28px 30px;
+      }
+
+      #multiplayer-title {
+        margin: 0 0 22px;
+        color: #fff;
+        font-size: 30px;
+        font-weight: 700;
+        text-align: center;
+      }
+
       #world-create-panel {
-        background: #070e14;
-        border: 4px solid #1a1a1a;
-        border-radius: 8px;
-        width: min(520px, 92vw);
+        background: #070e1480;
+        width: 100%;
+        height: 100%;
         padding: 28px 30px;
       }
 
@@ -197,10 +220,6 @@
         padding: 12px 10px;
         border-radius: 4px;
         outline: none;
-      }
-
-      .world-create-input:focus {
-        border-color: #7cb342;
       }
 
       .world-create-buttons {
@@ -274,27 +293,19 @@
 
       input[type="number"],
       input[type="text"] {
-        width: 110px;
-        padding: 6px 8px;
-        border: 2px solid #3f3f3f;
-        border-radius: 4px;
-        background: #232323;
-        color: #e7e7e7;
-        font-size: 14px;
-        outline: none;
-      }
-
-      input[type="number"]:focus {
-        border-color: #7cb342;
+      width: 110px;
+      padding: 6px 8px;
+    border: 2px solid #ffffff;
+    border-radius: 0px;
+    background: #000000;
+    color: #e7e7e7;
+    font-size: 14px;
+    outline: none;
       }
 
       input[type="text"] {
-        width: 160px;
+        width: 254px;
         text-align: center;
-      }
-
-      input[type="text"]:focus {
-        border-color: #7cb342;
       }
 
       .keybind-input {
@@ -398,9 +409,9 @@
       }
 
       #minecraft_image {
-        width: 452px;
-        height: 79px;
-        background-image: url('assets/textures/gui/minecraft.png');
+        width: 472px;
+        height: 150px;
+        background-image: url('assets/textures/gui/title.png');
         background-size: cover;
         background-repeat: no-repeat;
       }
@@ -410,7 +421,6 @@
     <!-- Main Menu -->
     <div id="main-menu">
       <div id="minecraft_image"></div>
-      <div id="menu-title">JAVASCRIPT EDITION</div>
       
       <div id="play-button" class="menu-button">SinglePlayer</div>
       <div id="multiplayer-button" class="menu-button">MultiPlayer</div>
@@ -419,6 +429,42 @@
       <div id="loading-text">Loading world...</div>
       
       
+    </div>
+
+    <!-- Multiplayer Connect Menu -->
+    <div id="multiplayer-menu" class="hidden">
+      <div id="multiplayer-panel">
+        <h2 id="multiplayer-title">Join Server</h2>
+        <div style="color: #d9d9d9; font-size: 14px; margin-bottom: 16px;">
+          Instructions: first install npm packages using the command "npm install ws prismarine-chunk prismarine-block prismarine-registry minecraft-data" in the js folder, then run the bridge server using "node bridgeServer.js" in the js folder. And start the localhost server. After that, you can connect to a server by entering its address and port below in the html gui.
+          And Currently it only works for server which doesn't require microsoft account login.
+        </div>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="mp-host-input">Server Address</label>
+          <input id="mp-host-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" value="example.com" />
+        </div>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="mp-port-input">Port</label>
+          <input id="mp-port-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" value="25565" />
+        </div>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="mp-username-input">Username</label>
+          <input id="mp-username-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" maxlength="16" value="Player" />
+        </div>
+
+        <div class="world-create-field">
+          <label class="world-create-label" for="mp-protocol-input">Protocol Version</label>
+          <input id="mp-protocol-input" class="world-create-input" type="text" spellcheck="false" autocomplete="off" value="771" />
+        </div>
+
+        <div class="world-create-buttons">
+          <button id="mp-back-button" class="settings-button">Back</button>
+          <button id="mp-connect-button" class="settings-button primary">Join Server</button>
+        </div>
+      </div>
     </div>
 
     <!-- World Creation Menu -->
@@ -765,8 +811,41 @@
         </div>
       </div>
     </div>
-    <div id="credits">Textures from Minecraft © Mojang Studios / Microsoft — used for educational purposes.</div>
+    <div id="credits">Some textures have been modified from the original Good Vibes texture pack.</div>
     <div id="crosshair"></div>
     <script type="module" src="js/main.js"></script>
+    <script type="module">
+      import { main } from "./js/main.js";
+
+      const mainMenu = document.getElementById("main-menu");
+      const multiplayerButton = document.getElementById("multiplayer-button");
+      const multiplayerMenu = document.getElementById("multiplayer-menu");
+      const mpBackButton = document.getElementById("mp-back-button");
+      const mpConnectButton = document.getElementById("mp-connect-button");
+
+      multiplayerButton.addEventListener("click", () => {
+        multiplayerMenu.classList.remove("hidden");
+      });
+
+      mpBackButton.addEventListener("click", () => {
+        multiplayerMenu.classList.add("hidden");
+      });
+
+      mpConnectButton.addEventListener("click", () => {
+        const host = document.getElementById("mp-host-input").value.trim();
+        const port = parseInt(document.getElementById("mp-port-input").value, 10) || 25565;
+        const username = document.getElementById("mp-username-input").value.trim() || "Player";
+        const protocolVersion = parseInt(document.getElementById("mp-protocol-input").value, 10) || 771;
+
+        if (!host) {
+          alert("Enter a server address first.");
+          return;
+        }
+
+        multiplayerMenu.classList.add("hidden");
+        mainMenu.classList.add("hidden");
+        main({ multiplayer: true, host, port, username, protocolVersion });
+      });
+    </script>
   </body>
 </html>

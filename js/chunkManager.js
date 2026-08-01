@@ -1,4 +1,5 @@
 import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
+import { loadMCABuffer, loadMCAFile } from './mcaLoader.js';
 import { SEED, RENDER, DEBUG } from './config.js';
 import * as THREE from './three.module.js';
 import { calculateChunkLighting, lightToRenderBrightness } from './lighting.js';
@@ -34,6 +35,10 @@ const FACE_DIRS = [
 ];
 
 const DEFAULT_UV_RECT = Object.freeze({ u0: 0, v0: 0, u1: 1, v1: 1 });
+
+const SOURCE_ATLAS_IMAGE_PATH = 'assets/textures/atlas.png';
+const SOURCE_ATLAS_JSON_PATH = 'assets/textures/atlas.json';
+
 
 export default class ChunkManager {
   constructor(scene, options = {}) {
@@ -99,6 +104,112 @@ export default class ChunkManager {
     this._chunkWorker = null;
     this._pendingRequests = new Map(); // key -> { key, cx, cz, priority }
     this._initChunkWorker();
+
+    this._mcaChunks = new Map();
+    this._mcaOnly = !!options.mcaOnly;
+    this._mcaWorker = null;
+    this._mcaWorkerReqId = 0;
+    this._mcaWorkerPending = new Map();
+    this._initMcaWorker();
+
+    if (options.mcaRegions && options.mcaRegions.length) {
+      this.mcaTotalRegions = options.mcaRegions.length;
+      this.mcaLoadedRegions = 0;
+      this.mcaFailedRegions = 0;
+      this.mcaReady = Promise.all(
+        options.mcaRegions.map((filename) =>
+          this.loadMCARegion(filename)
+            .catch((e) => {
+              console.warn(`ChunkManager: failed to auto-load MCA region "${filename}":`, e);
+              this.mcaFailedRegions++;
+            })
+            .finally(() => {
+              this.mcaLoadedRegions++;
+            })
+        )
+      );
+    } else {
+      this.mcaTotalRegions = 0;
+      this.mcaLoadedRegions = 0;
+      this.mcaFailedRegions = 0;
+      this.mcaReady = Promise.resolve();
+    }
+  }
+
+  _initMcaWorker() {
+    if (this._mcaWorker) return true;
+    try {
+      this._mcaWorker = new Worker('js/mcaWorker.js', { type: 'module' });
+      this._mcaWorker.onmessage = (e) => {
+        const { reqId, ok, entries, error } = e.data;
+        const pending = this._mcaWorkerPending.get(reqId);
+        if (!pending) return;
+        this._mcaWorkerPending.delete(reqId);
+        if (ok) pending.resolve(entries);
+        else pending.reject(new Error(error));
+      };
+      this._mcaWorker.onerror = (e) => {
+        console.warn('ChunkManager: MCA worker error:', e.message || e);
+      };
+      return true;
+    } catch (e) {
+      this._mcaWorker = null;
+      return false;
+    }
+  }
+
+  _loadMCAInWorker(source, options) {
+    return new Promise((resolve, reject) => {
+      const reqId = ++this._mcaWorkerReqId;
+      this._mcaWorkerPending.set(reqId, { resolve, reject });
+      const transfer = (source instanceof ArrayBuffer) ? [source] : [];
+      this._mcaWorker.postMessage({ reqId, source, options }, transfer);
+    }).then((entries) => {
+      const result = new Map();
+      for (const e of entries) {
+        result.set(e.key, {
+          chunkX: e.chunkX,
+          chunkZ: e.chunkZ,
+          data: new Uint16Array(e.data),
+          heightMap: new Int16Array(e.heightMap),
+          biomeMap: new Uint8Array(e.biomeMap),
+        });
+      }
+      return result;
+    });
+  }
+
+  async loadMCARegion(source, options = {}) {
+    let parsed;
+    if (this._mcaWorker) {
+      try {
+        parsed = await this._loadMCAInWorker(source, options);
+      } catch (e) {
+        console.warn('ChunkManager: MCA worker failed, falling back to main-thread load:', e);
+        parsed = (source instanceof ArrayBuffer)
+          ? await loadMCABuffer(source, options)
+          : await loadMCAFile(source, options);
+      }
+    } else {
+      parsed = (source instanceof ArrayBuffer)
+        ? await loadMCABuffer(source, options)
+        : await loadMCAFile(source, options);
+    }
+
+    for (const [key, entry] of parsed) {
+      this._mcaChunks.set(key, entry);
+  
+      if (this.chunks.has(key)) {
+        const [cx, cz] = key.split(',').map(Number);
+        this._unloadChunk(cx, cz);
+        this._finalizeChunkFromWorker(entry, cx, cz);
+      }
+    }
+
+    if (DEBUG.logChunkLoading) {
+      console.log(`ChunkManager: loaded ${parsed.size} chunk(s) from MCA region`);
+    }
+    return parsed.size;
   }
 
   _initChunkWorker() {
@@ -128,7 +239,8 @@ export default class ChunkManager {
         }
 
         const chunk = { data: null, heightMap: null, biomeMap: null };
-        if (msg.data) chunk.data = new Uint8Array(msg.data);
+   
+        if (msg.data) chunk.data = new Uint16Array(msg.data);
         if (msg.heightMap) chunk.heightMap = new Int16Array(msg.heightMap);
         if (msg.biomeMap) chunk.biomeMap = new Uint8Array(msg.biomeMap);
 
@@ -224,6 +336,27 @@ export default class ChunkManager {
     }
   }
 
+  _loadSourceAtlas() {
+    if (!this._sourceAtlasPromise) {
+      this._sourceAtlasPromise = (async () => {
+        const [image, meta] = await Promise.all([
+          new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve(img);
+            img.onerror = () => reject(new Error(`failed to load ${SOURCE_ATLAS_IMAGE_PATH}`));
+            img.src = SOURCE_ATLAS_IMAGE_PATH;
+          }),
+          fetch(SOURCE_ATLAS_JSON_PATH).then((res) => {
+            if (!res.ok) throw new Error(`failed to fetch ${SOURCE_ATLAS_JSON_PATH} (${res.status})`);
+            return res.json();
+          }),
+        ]);
+        return { image, meta };
+      })();
+    }
+    return this._sourceAtlasPromise;
+  }
+
   _createBlockAtlas() {
     const textureEntries = Object.entries(BLOCK_TEXTURES);
     const textureCount = textureEntries.length;
@@ -268,38 +401,48 @@ export default class ChunkManager {
       };
     }
 
-    const imageLoader = new THREE.ImageLoader();
-    for (let i = 0; i < textureEntries.length; i++) {
-      const [textureKey, texturePath] = textureEntries[i];
-      const col = i % columns;
-      const row = Math.floor(i / columns);
-      const pixelX = col * cellSize + gutter;
-      const pixelY = row * cellSize + gutter;
+    this._loadSourceAtlas().then(({ image, meta }) => {
+      const srcTile = (meta && meta.tile_size) || tileSize;
+      const images = (meta && meta.images) || {};
 
-      imageLoader.load(
-        texturePath,
-        (image) => {
-          ctx.clearRect(pixelX - gutter, pixelY - gutter, tileSize + gutter * 2, tileSize + gutter * 2);
-          ctx.drawImage(image, pixelX, pixelY, tileSize, tileSize);
+      for (let i = 0; i < textureEntries.length; i++) {
+        const [textureKey, texturePath] = textureEntries[i];
+        const filename = texturePath.split('/').pop();
+        const atlasName = filename;
+        const entry = images[atlasName];
+        if (!entry) {
+          console.warn('ChunkManager: texture not found in atlas.json, leaving placeholder:', filename, textureKey);
+          continue;
+        }
 
-          ctx.drawImage(image, 0, 0, 1, image.height, pixelX - gutter, pixelY, gutter, tileSize);
-          ctx.drawImage(image, image.width - 1, 0, 1, image.height, pixelX + tileSize, pixelY, gutter, tileSize);
-          ctx.drawImage(image, 0, 0, image.width, 1, pixelX, pixelY - gutter, tileSize, gutter);
-          ctx.drawImage(image, 0, image.height - 1, image.width, 1, pixelX, pixelY + tileSize, tileSize, gutter);
+        const sx = entry.i * srcTile;
+        const sy = entry.j * srcTile;
+        const sw = srcTile;
+        const sh = srcTile;
 
-          ctx.drawImage(image, 0, 0, 1, 1, pixelX - gutter, pixelY - gutter, gutter, gutter);
-          ctx.drawImage(image, image.width - 1, 0, 1, 1, pixelX + tileSize, pixelY - gutter, gutter, gutter);
-          ctx.drawImage(image, 0, image.height - 1, 1, 1, pixelX - gutter, pixelY + tileSize, gutter, gutter);
-          ctx.drawImage(image, image.width - 1, image.height - 1, 1, 1, pixelX + tileSize, pixelY + tileSize, gutter, gutter);
+        const col = i % columns;
+        const row = Math.floor(i / columns);
+        const pixelX = col * cellSize + gutter;
+        const pixelY = row * cellSize + gutter;
 
-          atlasTexture.needsUpdate = true;
-        },
-        undefined,
-        () => {
-          console.warn('ChunkManager: Failed to load atlas tile:', texturePath, textureKey);
-        },
-      );
-    }
+        ctx.clearRect(pixelX - gutter, pixelY - gutter, tileSize + gutter * 2, tileSize + gutter * 2);
+        ctx.drawImage(image, sx, sy, sw, sh, pixelX, pixelY, tileSize, tileSize);
+
+        ctx.drawImage(image, sx, sy, 1, sh, pixelX - gutter, pixelY, gutter, tileSize);
+        ctx.drawImage(image, sx + sw - 1, sy, 1, sh, pixelX + tileSize, pixelY, gutter, tileSize);
+        ctx.drawImage(image, sx, sy, sw, 1, pixelX, pixelY - gutter, tileSize, gutter);
+        ctx.drawImage(image, sx, sy + sh - 1, sw, 1, pixelX, pixelY + tileSize, tileSize, gutter);
+
+        ctx.drawImage(image, sx, sy, 1, 1, pixelX - gutter, pixelY - gutter, gutter, gutter);
+        ctx.drawImage(image, sx + sw - 1, sy, 1, 1, pixelX + tileSize, pixelY - gutter, gutter, gutter);
+        ctx.drawImage(image, sx, sy + sh - 1, 1, 1, pixelX - gutter, pixelY + tileSize, gutter, gutter);
+        ctx.drawImage(image, sx + sw - 1, sy + sh - 1, 1, 1, pixelX + tileSize, pixelY + tileSize, gutter, gutter);
+      }
+
+      atlasTexture.needsUpdate = true;
+    }).catch((e) => {
+      console.warn('ChunkManager: failed to load source atlas (atlas.png/atlas.json):', e);
+    });
 
     return {
       texture: atlasTexture,
@@ -460,6 +603,38 @@ export default class ChunkManager {
       ...blockMaterials,
       ...materialSets,
     };
+  }
+
+  setNetworkChunk(cx, cz, entry) {
+    const key = this._key(cx, cz);
+    this._mcaChunks.set(key, entry);
+    if (this.chunks.has(key)) {
+      this._unloadChunk(cx, cz);
+      this._finalizeChunkFromWorker(entry, cx, cz);
+    }
+  }
+
+  unloadNetworkChunk(cx, cz) {
+    const key = this._key(cx, cz);
+    this._mcaChunks.delete(key);
+    if (this.chunks.has(key)) this._unloadChunk(cx, cz);
+  }
+
+  enterLiveServerMode() {
+    this._mcaOnly = true;
+    this._mcaChunks.clear();
+    for (const key of Array.from(this.chunks.keys())) {
+      const [cx, cz] = key.split(',').map(Number);
+      this._unloadChunk(cx, cz);
+    }
+  
+    this._loadQueue.length = 0;
+    this._queuedKeys.clear();
+    if (this._chunkWorker) this._restartChunkWorker('entering live server mode');
+  }
+
+  setMcaOnly(enabled) {
+    this._mcaOnly = !!enabled;
   }
 
   _key(cx, cz) { return `${cx},${cz}`; }
@@ -667,9 +842,19 @@ export default class ChunkManager {
   }
 
   _loadChunk(cx, cz) {
-    // Legacy synchronous load (fallback). Prefer worker pipeline.
-    const chunk = generateChunk(cx, cz, this.seed);
+    const mcaEntry = this._mcaChunks.get(this._key(cx, cz));
+    const chunk = mcaEntry ?? (this._mcaOnly ? this._emptyChunk(cx, cz) : generateChunk(cx, cz, this.seed));
     this._finalizeChunkFromWorker(chunk, cx, cz);
+  }
+
+  _emptyChunk(cx, cz) {
+    return {
+      chunkX: cx,
+      chunkZ: cz,
+      data: new Uint16Array(CHUNK_SIZE * CHUNK_SIZE * HEIGHT),
+      heightMap: new Int16Array(CHUNK_SIZE * CHUNK_SIZE).fill(MIN_Y - 1),
+      biomeMap: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE),
+    };
   }
 
   // Finalize chunk data received/generated off-main-thread: compute top, build meshes, add to scene
@@ -883,7 +1068,7 @@ export default class ChunkManager {
             const globalBlockX = cx * CHUNK_SIZE + x;
             const globalBlockY = y;
             const globalBlockZ = cz * CHUNK_SIZE + z;
-            if ((faceIdx === 2 && blockId !== BLOCK_STONE)|| blockId === BLOCK_LEAVES) {
+            if ((faceIdx === 2 && blockId === BLOCK_GRASS)|| blockId === BLOCK_LEAVES) {
               uvRot = this._rotFromSeed(globalBlockX, globalBlockY, globalBlockZ);
             }
 
@@ -1198,7 +1383,11 @@ export default class ChunkManager {
         if (this.chunks.has(item.key)) continue;
 
         try {
-          if (this._chunkWorker) {
+          const mcaEntry = this._mcaChunks.get(item.key);
+          if (mcaEntry) {
+            this._finalizeChunkFromWorker(mcaEntry, item.cx, item.cz, { queuedAt: item.queuedAt, priority: item.priority });
+            submitted++;
+          } else if (this._chunkWorker && !this._mcaOnly) {
             const key = item.key;
             if (!this._pendingRequests.has(key)) {
               this._pendingRequests.set(key, item);
@@ -1848,6 +2037,11 @@ export default class ChunkManager {
       this._chunkWorker.terminate();
       this._chunkWorker = null;
     }
+    if (this._mcaWorker) {
+      this._mcaWorker.terminate();
+      this._mcaWorker = null;
+    }
+    this._mcaWorkerPending.clear();
     
     // Clear pending requests
     this._pendingRequests.clear();

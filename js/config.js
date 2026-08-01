@@ -26,11 +26,54 @@ export const TERRAIN = {
 };
 
 export const CAVES = {
-  scale: 0.06,           // cave noise scale
-  octaves: 3,            // cave noise layers
-  threshold: 0.5,        // cave carving threshold (higher = fewer caves)
-  maxY: 72,              // max height caves can generate (seaLevel + 10)
-  openToSurface: true,   // whether caves can open to surface
+  minY: -58,               
+  maxY: 180,               
+  openToSurface: true,     
+  surfaceOpenBuffer: 4,        
+  cheeseScale: 0.010,
+  cheeseThreshold: 0.32,     
+  cheeseDepthBias: 0.12,     
+  megaCheeseScale: 0.0035,
+  megaCheeseThreshold: 0.45, 
+  megaCheeseMaxY: 40,        
+  spaghettiScale: 0.020,
+  spaghettiThickness: 0.045, 
+  noodleScale: 0.045,
+  noodleMinThickness: 0.016,
+  noodleMaxThickness: 0.035,
+  noodleMinY: -48,
+  noodleMaxY: 8,
+  pillarScale: 0.09,
+  pillarThreshold: 0.62,
+};
+
+export const DEEPSLATE = {
+  transitionStartY: 0,    
+  transitionEndY: -8,     
+  borderNoiseScale: 0.25, 
+  borderNoiseAmplitude: 7,
+};
+
+export const LUSH_CAVES = {
+  humidityThreshold: 0.6, 
+  maxY: 50,                
+  mossFloorChance: 0.55,
+  vineChance: 0.12,
+  vineMinLength: 1,
+  vineMaxLength: 3,
+  clayPoolChance: 0.08,
+};
+
+
+
+export const AQUIFERS = {
+  regionScale: 0.010,        
+  regionThreshold: 0.45,     
+  levelScale: 0.02,          
+  levelVariance: 18,         
+  maxY: 40,                  
+  alwaysLavaMaxY: -55,       
+  lavaChanceBelowZero: 0.18, 
 };
 
 export const TREES = {

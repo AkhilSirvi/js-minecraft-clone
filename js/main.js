@@ -13,6 +13,8 @@ import { createPlayerAvatarParts } from "./playerAvatarModel.js";
 import createChat from "./chat.js";
 import {SEED,PLAYER,PHYSICS,RENDER,DAY_NIGHT,CAMERA,} from "./config.js";
 import WaterPhysics, { WATER_CONFIG } from "./waterPhysics.js";
+import { MCBridge } from "./mcBridgeClient.js";
+import { convertNetworkChunk, resolveNetworkBlockId } from "./networkChunkLoader.js";
 
 export function main(worldOptions = {}) {
   const activeSeed = Number.isFinite(worldOptions.seed) ? worldOptions.seed : SEED;
@@ -319,6 +321,7 @@ export function main(worldOptions = {}) {
 
   function tryStartJump() {
     if (isSpectator) return;
+    if (suppressCollisionPush) return false;
     if (!(onGround || (velY <= 0 && velY > -2))) return false;
 
     const bottomY = player.position.y - currentPlayerHeight / 2;
@@ -562,6 +565,8 @@ export function main(worldOptions = {}) {
     debugOverlay,
     renderer,
     anisotropicFiltering: ANISOTROPIC_FILTERING,
+    // mcaRegions: worldOptions.multiplayer ? [] : ['r.0.0.mca', 'r.-1.0.mca', 'r.0.-1.mca', 'r.-1.-1.mca'],
+    // mcaOnly:true,
   });
 
   let fogNear = 0;
@@ -588,6 +593,106 @@ export function main(worldOptions = {}) {
     const message = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
     chat.log(`[ERROR] ${message}`, 'error');
   };
+
+  const mcBridge = new MCBridge();
+  let mcConnected = false;
+  let mcSpawnFreezeUntil = 0;
+  let mcSpawnDamageGraceUntil = 0;
+  const MC_SPAWN_FREEZE_MS = 6000;
+  const MC_SPAWN_DAMAGE_GRACE_MS = 10000;
+  function mcSpawnFreezeActive() {
+    return performance.now() < mcSpawnFreezeUntil;
+  }
+  function startMcSpawnGrace() {
+    mcSpawnFreezeUntil = performance.now() + MC_SPAWN_FREEZE_MS;
+    mcSpawnDamageGraceUntil = performance.now() + MC_SPAWN_DAMAGE_GRACE_MS;
+  }
+
+  mcBridge.onBridgeOpen = () => {
+    chat.log("[MC] Connected to local bridge, joining server...", "info");
+  };
+  mcBridge.onStatus = (state) => {
+    chat.log(`[MC] ${state}`, "info");
+  };
+  mcBridge.onJoined = (entityId) => {
+    chat.log(`[MC] Joined — entity id ${entityId}`, "info");
+  };
+  mcBridge.onSpawned = ({ x, y, z, yaw, pitch }) => {
+    mcConnected = true;
+    player.position.set(x, y + currentPlayerHeight / 2, z);
+    player.rotation.y = ((180 - yaw) * Math.PI) / 180;
+    pitchObject.rotation.x = (-pitch * Math.PI) / 180;
+    startMcSpawnGrace();
+    chat.log(`[MC] Spawned at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`, "info");
+  };
+  mcBridge.onChat = (text) => {
+    chat.log(`[MC] ${text}`, "info");
+  };
+  mcBridge.onChunk = (cx, cz, sections) => {
+    try {
+      const entry = convertNetworkChunk(cx, cz, sections);
+      cm.setNetworkChunk(cx, cz, entry);
+    } catch (e) {
+      console.error(`[MC] failed to convert chunk ${cx},${cz}:`, e);
+    }
+  };
+  mcBridge.onUnloadChunk = (cx, cz) => {
+    cm.unloadNetworkChunk(cx, cz);
+  };
+  mcBridge.onBlockChanges = (changes) => {
+    for (const { x, y, z, name } of changes) {
+      try {
+        const blockId = resolveNetworkBlockId(name);
+        cm.setBlockAtWorld(x, y, z, blockId);
+      } catch (e) {
+        console.error(`[MC] failed to apply block change at (${x},${y},${z}):`, e);
+      }
+    }
+  };
+  mcBridge.onDisconnected = ({ reason, phase }) => {
+    mcConnected = false;
+    chat.log(`[MC] Disconnected (${phase}): ${reason}`, "error");
+  };
+  mcBridge.onError = (message) => {
+    chat.log(`[MC] ${message}`, "error");
+  };
+  mcBridge.onBridgeClose = () => {
+    mcConnected = false;
+  };
+
+  function joinMultiplayerServer({ host, port, username, protocolVersion }) {
+    if (!host) {
+      chat.log("[MC] Enter a server host first.", "error");
+      return;
+    }
+    chat.log("[MC] Switching to live server mode (disabling local terrain generation)...", "info");
+    cm.enterLiveServerMode();
+    startMcSpawnGrace();
+    chat.log(`[MC] Connecting to ${host}:${port || 25565} as ${username || "Player"}...`, "info");
+    mcBridge.connect({
+      host,
+      port: port || 25565,
+      username: username || "Player",
+      protocolVersion: protocolVersion || 771,
+    });
+  }
+  function leaveMultiplayerServer() {
+    mcBridge.disconnect();
+    mcConnected = false;
+    chat.log("[MC] Disconnected.", "info");
+  }
+
+  window.mcJoinServer = joinMultiplayerServer;
+  window.mcLeaveServer = leaveMultiplayerServer;
+
+  if (worldOptions.multiplayer) {
+    joinMultiplayerServer({
+      host: worldOptions.host,
+      port: worldOptions.port,
+      username: worldOptions.username,
+      protocolVersion: worldOptions.protocolVersion,
+    });
+  }
 
   // Initialize 3D item renderer and HUD
   const itemRenderer = new ItemRenderer(cm);
@@ -778,22 +883,39 @@ export function main(worldOptions = {}) {
         }
       }
     }
-    for (let dy = pushStep; dy <= maxPushDist; dy += pushStep) {
-      for (let dist = pushStep; dist <= maxPushDist; dist += pushStep) {
-        for (const [dx, dz] of directions) {
-          const len = Math.hypot(dx, dz);
-          const pushX = player.position.x + (dx / len) * dist;
-          const pushZ = player.position.z + (dz / len) * dist;
-          if (isPlayerPositionFree(pushX, player.position.y + dy, pushZ)) {
-            player.position.x = pushX;
-            player.position.y += dy;
-            player.position.z = pushZ;
-            velocity.x = 0;
-            velocity.z = 0;
-            velY = 0;
-            return;
+
+    const bsStep = bs;
+    const maxRadiusBlocks = Math.ceil(maxPushDist / bsStep);
+    for (let radius = 1; radius <= maxRadiusBlocks; radius++) {
+      let bestCandidate = null;
+      let bestDistSq = Infinity;
+      for (let ix = -radius; ix <= radius; ix++) {
+        for (let iz = -radius; iz <= radius; iz++) {
+          for (let iy = -radius; iy <= radius; iy++) {
+            if (
+              Math.max(Math.abs(ix), Math.abs(iz), Math.abs(iy)) !== radius
+            )
+              continue;
+            const pushX = player.position.x + ix * bsStep;
+            const pushY = player.position.y + iy * bsStep;
+            const pushZ = player.position.z + iz * bsStep;
+            const distSq = ix * ix + iy * iy + iz * iz;
+            if (distSq >= bestDistSq) continue;
+            if (isPlayerPositionFree(pushX, pushY, pushZ)) {
+              bestCandidate = { x: pushX, y: pushY, z: pushZ };
+              bestDistSq = distSq;
+            }
           }
         }
+      }
+      if (bestCandidate) {
+        player.position.x = bestCandidate.x;
+        player.position.y = bestCandidate.y;
+        player.position.z = bestCandidate.z;
+        velocity.x = 0;
+        velocity.z = 0;
+        velY = 0;
+        return;
       }
     }
   }
@@ -949,6 +1071,16 @@ export function main(worldOptions = {}) {
 
   player.position.set(spawnX, spawnY + playerHeight / 2, spawnZ);
   scene.add(player);
+
+  let mcaFullyLoaded = cm.mcaTotalRegions === 0;
+  cm.mcaReady.then(() => {
+    const realSpawnY = cm.getTopAtWorld(spawnWorldX, spawnWorldZ, true);
+    if (isFinite(realSpawnY) && realSpawnY !== spawnY) {
+      player.position.y = realSpawnY + playerHeight / 2;
+      velY = 0;
+    }
+    mcaFullyLoaded = true;
+  });
 
   const pitchObject = new THREE.Object3D();
   pitchObject.position.y = playerHeight * CAMERA.eyeHeight;
@@ -1143,33 +1275,12 @@ export function main(worldOptions = {}) {
       ny = Number(y);
     }
 
-    const safe = opts.safe !== false;
-    if (safe) {
-      const destCx = Math.floor(nx / (CHUNK_SIZE * blockSize));
-      const destCz = Math.floor(nz / (CHUNK_SIZE * blockSize));
-      if (cm.chunks && cm.chunks.has(cm._key(destCx, destCz))) {
-        const maxUp = 100;
-        let placed = false;
-        for (let dy = 0; dy <= maxUp; dy++) {
-          const testY = ny + dy;
-          if (isPlayerPositionFree(nx, testY, nz)) {
-            ny = testY;
-            placed = true;
-            break;
-          }
-        }
-        if (!placed)
-          console.warn(
-            "teleport: no free space found above target, placing at requested Y",
-          );
-      }
-    }
-
     player.position.set(nx, ny, nz);
     velocity.set(0, 0, 0);
     velY = 0;
     onGround = false;
     fallDistance = 0;
+    suppressCollisionPush = true;
     console.log(`Teleported player to (${nx}, ${ny}, ${nz})`);
   };
   window.tp = window.teleport;
@@ -1263,7 +1374,7 @@ export function main(worldOptions = {}) {
   const loadingStartedAt = performance.now();
   const MIN_LOADING_VISIBLE_MS = 4800;
   const READY_HOLD_MS = 700;
-  const MAX_LOADING_VISIBLE_MS = 7000;
+  const MAX_LOADING_VISIBLE_MS = 20000;
   let chunksReadyAt = null;
 
   function countLoadedChunksInRenderRange() {
@@ -1304,15 +1415,23 @@ export function main(worldOptions = {}) {
     const { loadedInRange, totalInRange } = countLoadedChunksInRenderRange();
     const requiredChunks = Math.min(3, Math.max(1, totalInRange));
 
-    loadingStatus.textContent = `Chunks loading`;
-
-    if (!loadingOverlayHidden && totalVisibleElapsed >= MAX_LOADING_VISIBLE_MS) {
-      worldReady = true;
-      loadingHint.textContent = "Loading continued in background...";
-      hideLoadingOverlay();
-      return true;
+    if (!mcaFullyLoaded) {
+      loadingStatus.textContent = cm.mcaTotalRegions > 0
+        ? `Loading region files (${cm.mcaLoadedRegions}/${cm.mcaTotalRegions})...`
+        : "Preparing chunks...";
+    } else {
+      loadingStatus.textContent = "Chunks loading";
     }
-    
+
+    if (!mcaFullyLoaded) {
+      if (totalVisibleElapsed >= MAX_LOADING_VISIBLE_MS) {
+        loadingHint.textContent = "Some region files are taking a while - continuing anyway...";
+        worldReady = true;
+        chunksReadyAt = chunksReadyAt ?? nowMs;
+      } else {
+        return false;
+      }
+    }
 
     if (!worldReady && loadedInRange >= requiredChunks) {
       worldReady = true;
@@ -1753,11 +1872,9 @@ export function main(worldOptions = {}) {
   let walkTimer = 0;
   let velY = 0;
   let onGround = true;
+  let suppressCollisionPush = false;
   let fallDistance = 0;
-
-  // how many physics ticks the player is allowed to be
-  // unsupported (e.g. sprinting over a narrow gap) before gravity actually
-  // kicks in. 
+ 
   const GROUND_CHECK_INTERVAL_TICKS = 4;
   let groundGraceTicksRemaining = 0;
 
@@ -1830,6 +1947,7 @@ export function main(worldOptions = {}) {
   }
 
   function shouldNegateFallDamage() {
+    if (performance.now() < mcSpawnDamageGraceUntil) return true;
     if (!waterPhysics || !WATER_CONFIG.preventsFallDamage) return false;
     if (typeof waterPhysics.isPlayerInWater !== "function") return false;
 
@@ -1875,13 +1993,27 @@ export function main(worldOptions = {}) {
       return;
     }
     const wasOnGround = onGround;
-    resolvePlayerCollision();
+    if (suppressCollisionPush) {
+      if (
+        isPlayerPositionFree(
+          player.position.x,
+          player.position.y,
+          player.position.z,
+        )
+      ) {
+        suppressCollisionPush = false;
+      }
+    } else {
+      resolvePlayerCollision();
+    }
 
     direction.set(0, 0, 0);
-    if (move.forward) direction.z -= 1;
-    if (move.backward) direction.z += 1;
-    if (move.left) direction.x -= 1;
-    if (move.right) direction.x += 1;
+    if (!suppressCollisionPush) {
+      if (move.forward) direction.z -= 1;
+      if (move.backward) direction.z += 1;
+      if (move.left) direction.x -= 1;
+      if (move.right) direction.x += 1;
+    }
 
     if (direction.lengthSq() > 0) {
       direction.normalize();
@@ -2037,7 +2169,12 @@ export function main(worldOptions = {}) {
       groundGraceTicksRemaining--;
     }
 
-    if (hasSupportNow || groundGraceTicksRemaining > 0) {
+    if (suppressCollisionPush) {
+      velY = 0;
+    } else if (mcSpawnFreezeActive()) {
+      onGround = true;
+      velY = 0;
+    } else if (hasSupportNow || groundGraceTicksRemaining > 0) {
       onGround = true;
       if (velY < 0) velY = 0;
     } else {
@@ -2046,7 +2183,7 @@ export function main(worldOptions = {}) {
       if (velY < terminalVelocity) velY = terminalVelocity;
     }
 
-    let moveY = velY * dt;
+    let moveY = suppressCollisionPush ? 0 : velY * dt;
     if (velY > 0) {
       const currentTopY = player.position.y + currentPlayerHeight / 2;
       const projectedTopY = currentTopY + moveY;
@@ -2096,7 +2233,9 @@ export function main(worldOptions = {}) {
       }
     }
 
-    if (isFinite(maxGroundY)) {
+    if (suppressCollisionPush) {
+      onGround = false;
+    } else if (isFinite(maxGroundY)) {
       if (playerBottomY < maxGroundY) {
         player.position.y = maxGroundY + currentPlayerHeight / 2;
         velY = 0;
@@ -2117,14 +2256,8 @@ export function main(worldOptions = {}) {
         }
       }
     } else {
-      // No valid ground data - chunks not loaded yet
-      if (!hasValidGroundData) {
-        // Safety: chunks aren't loaded beneath player, reduce gravity to prevent falling through
-        if (velY < 0) {
-          velY *= 0.5; // Slow down falling while chunks load
-        }
-        // Keep onGround state to prevent freefall
-        // onGround remains as it was (don't set to false)
+      const belowWorldBottom = playerBottomY < MIN_Y * blockSize;
+      if (!hasValidGroundData && !belowWorldBottom) {
       } else {
         onGround = groundGraceTicksRemaining > 0;
       }
@@ -2565,6 +2698,20 @@ export function main(worldOptions = {}) {
       if (typeof blockBreaker !== "undefined" && blockBreaker)
         blockBreaker.update(gameDelta);
     } catch (e) {}
+
+    if (mcConnected) {
+      const yawDeg = (180 - (player.rotation.y * 180) / Math.PI);
+      const pitchDeg = (-pitchObject.rotation.x * 180) / Math.PI;
+      mcBridge.sendMove(
+        player.position.x,
+        player.position.y - currentPlayerHeight / 2,
+        player.position.z,
+        yawDeg,
+        pitchDeg,
+        onGround,
+      );
+    }
+
     renderer.render(scene, camera);
     prevTime = time;
   }
