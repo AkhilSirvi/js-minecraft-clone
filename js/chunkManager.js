@@ -1,5 +1,5 @@
 import { generateChunk, CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
-import { loadMCABuffer, loadMCAFile } from './mcaLoader.js';
+import { loadMCABuffer, loadMCAFile } from './Mcaloader.js';
 import { SEED, RENDER, DEBUG } from './config.js';
 import * as THREE from './three.module.js';
 import { calculateChunkLighting, lightToRenderBrightness } from './lighting.js';

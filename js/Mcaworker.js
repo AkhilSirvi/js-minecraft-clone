@@ -1,4 +1,4 @@
-import { loadMCABuffer, loadMCAFile } from './mcaLoader.js';
+import { loadMCABuffer, loadMCAFile } from './Mcaloader.js';
 
 self.onmessage = async (e) => {
   const { reqId, source, options } = e.data;

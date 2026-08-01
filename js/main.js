@@ -13,8 +13,8 @@ import { createPlayerAvatarParts } from "./playerAvatarModel.js";
 import createChat from "./chat.js";
 import {SEED,PLAYER,PHYSICS,RENDER,DAY_NIGHT,CAMERA,} from "./config.js";
 import WaterPhysics, { WATER_CONFIG } from "./waterPhysics.js";
-import { MCBridge } from "./mcBridgeClient.js";
-import { convertNetworkChunk, resolveNetworkBlockId } from "./networkChunkLoader.js";
+import { MCBridge } from "./Mcbridgeclient.js";
+import { convertNetworkChunk, resolveNetworkBlockId } from "./Networkchunkloader.js";
 
 export function main(worldOptions = {}) {
   const activeSeed = Number.isFinite(worldOptions.seed) ? worldOptions.seed : SEED;

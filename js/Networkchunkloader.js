@@ -2,7 +2,7 @@
 
 import { CHUNK_SIZE, MIN_Y, MAX_Y, HEIGHT } from './chunkGen.js';
 import { BLOCK } from '../data/blocks.js';
-import { resolveBlockId, unpackLongArray } from './mcaLoader.js';
+import { resolveBlockId, unpackLongArray } from './Mcaloader.js';
 
 function base64ToLongs(b64) {
   const bin = atob(b64);
